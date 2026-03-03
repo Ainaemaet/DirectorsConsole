@@ -21,6 +21,10 @@ import { NodeManager } from './components/NodeManager';
 import { MainMenu, addRecentProject } from './components/MainMenu';
 import { MultiSelectDropdown } from './components/MultiSelectDropdown';
 import { MultiNodeSelector } from '../components/MultiNodeSelector';
+import { ParallelResultsView } from '../components/ParallelResultsView';
+import { useJobGroupWebSocket } from '../hooks';
+import { submitJobGroup } from '../services/parallelGenerationService';
+import type { JobGroupWithCounts, ChildJobOutputs, JobGroupStatus } from '../types/jobGroup';
 import { WorkflowCategoriesModal } from './components/WorkflowCategoriesModal';
 import { 
   Trash2, Upload, Download, Tags, X, ChevronDown, 
@@ -803,6 +807,10 @@ export function StoryboardUI() {
   // State - Multi-Node Parallel Generation
   // ---------------------------------------------------------------------------
   const [selectedBackendIds, setSelectedBackendIds] = useState<string[]>([]);
+  const [activeJobGroup, setActiveJobGroup] = useState<JobGroupWithCounts | null>(null);
+  const [parallelSelectedIndex, setParallelSelectedIndex] = useState(0);
+  const activeJobGroupRef = useRef<JobGroupWithCounts | null>(null);
+  const activeJobGroupPanelIdRef = useRef<number | null>(null);
   
   // ---------------------------------------------------------------------------
   // State - Project Settings
@@ -2390,69 +2398,25 @@ export function StoryboardUI() {
       console.log('[Parallel] Base workflow built:', JSON.stringify(baseWorkflow, null, 2));
       addLog('info', `Base workflow nodes: ${Object.keys(baseWorkflow).length}`);
       
-      // Build workflow progress info for multi-phase tracking
-      const parallelWfProgressInfo = buildWorkflowProgressInfo(baseWorkflow);
-      if (parallelWfProgressInfo.samplerNodeIds.length > 1) {
-        addLog('info', `Multi-sampler workflow: ${parallelWfProgressInfo.samplerNodeIds.length} sampler phases detected`);
+      // ====================================================================================
+      // STEP 2: SUBMIT AS JOB GROUP VIA ORCHESTRATOR
+      // Seeds are generated server-side using seed_strategy: 'random'.
+      // Path normalization is handled by Orchestrator's path_translator for NAS paths.
+      // ====================================================================================
+
+      const orchestratorUrl = projectManager.getProject().orchestratorUrl;
+      if (!orchestratorUrl) {
+        showError('Orchestrator URL not configured. Open Settings to enable parallel generation.');
+        setPanels(prev => prev.map(p => p.id === panelId ? { ...p, status: 'error', progress: 0 } : p));
+        return;
       }
-      
-      // ====================================================================================
-      // STEP 2: FOR EACH NODE, CLONE WORKFLOW AND CHANGE ONLY THE SEED
-      // ====================================================================================
-      
-      // Helper function to apply seed to workflow (finds sampler nodes and updates seed)
-      const applySeedToWorkflow = (workflow: any, seedValue: number): void => {
-        for (const nodeId of Object.keys(workflow)) {
-          const node = workflow[nodeId];
-          
-          // KSampler, KSamplerAdvanced, SamplerCustom, etc.
-          if (node.class_type?.includes('Sampler') || node.class_type?.includes('KSampler')) {
-            if (node.inputs && 'seed' in node.inputs) {
-              node.inputs.seed = seedValue;
-            }
-            if (node.inputs && 'noise_seed' in node.inputs) {
-              node.inputs.noise_seed = seedValue;
-            }
-          }
-          
-          // RandomNoise nodes
-          if (node.class_type === 'RandomNoise') {
-            if (node.inputs && 'noise_seed' in node.inputs) {
-              node.inputs.noise_seed = seedValue;
-            }
-          }
-        }
-      };
-      
-      // Track active jobs for this panel
-      const activeJobs: Array<{
-        nodeId: string;
-        nodeName: string;
-        promptId: string;
-        seed: number;
-      }> = [];
-      
-      // Initialize parallel jobs tracking
-      const parallelJobs = backendIds.map(backendId => {
-        const node = renderNodes.find(n => n.id === backendId);
-        return {
-          nodeId: backendId,
-          nodeName: node?.name || backendId,
-          promptId: '',
-          seed: 0,
-          progress: 0,
-          status: 'pending' as const,
-        };
-      });
-      
-      // Initialize atomic version counter for this panel using filesystem scan
-      // This prevents version collisions when multiple parallel jobs save concurrently
+
+      // Show panel as generating immediately (parallelJobs set after response arrives)
       const panelName = panel?.name || `Panel_${String(panelId).padStart(2, '0')}`;
       const currentHistory = panel?.imageHistory || [];
       const startVersion = await projectManager.getNextVersion(panelName, currentHistory);
       nextVersionRef.current.set(panelId, startVersion);
-      
-      // Update panel to show it's generating with parallel jobs tracking
+
       setPanels(prev => prev.map(p =>
         p.id === panelId ? {
           ...p,
@@ -2460,145 +2424,65 @@ export function StoryboardUI() {
           progress: 0,
           parameterValues: { ...paramsToUse },
           workflowId: workflowIdToUse || undefined,
-          parallelJobs: parallelJobs,
+          parallelJobs: backendIds.map(id => ({
+            nodeId: id,
+            nodeName: renderNodes.find(n => n.id === id)?.name || id,
+            promptId: '',
+            seed: 0,
+            progress: 0,
+            status: 'pending' as const,
+          })),
         } : p
       ));
-      
-      // Track generation start time and reset batch save trigger
+
       generationStartTimes.current.set(panelId, Date.now());
-      batchSaveTriggeredRef.current.delete(String(panelId)); // Reset for new generation
-      savedJobsRef.current.clear(); // Clear saved jobs tracking for new generation
-      
-      // ====================================================================================
-      // STEP 3: SUBMIT TO EACH NODE DIRECTLY (NOT via Orchestrator job-group)
-      // ====================================================================================
-      
-      for (let i = 0; i < backendIds.length; i++) {
-        const backendId = backendIds[i];
-        const node = renderNodes.find(n => n.id === backendId);
-        
-        if (!node || node.status !== 'online') {
-          addLog('warning', `Skipping offline node: ${node?.name || backendId}`);
-          // Update parallel job status to error
-          setPanels(prev => prev.map(p => {
-            if (p.id !== panelId || !p.parallelJobs) return p;
-            return {
-              ...p,
-              parallelJobs: p.parallelJobs.map(j =>
-                j.nodeId === backendId ? { ...j, status: 'error' as const } : j
-              )
-            };
-          }));
-          continue;
-        }
-        
-        // Clone the base workflow
-        const workflowCopy = JSON.parse(JSON.stringify(baseWorkflow));
-        
-        // Generate a random seed for this variation
-        const seed = Math.floor(Math.random() * 2147483647);
-        
-        // Apply the seed to the cloned workflow
-        applySeedToWorkflow(workflowCopy, seed);
-        
-        // Normalize path separators for this node's OS
-        normalizeWorkflowPaths(workflowCopy, (node.os || 'unknown') as TargetOS);
-        
-        console.log(`[Parallel] Submitting to node ${node.name} (OS: ${node.os}) with seed ${seed}`);
-        addLog('comfyui', `Submitting variation ${i + 1}/${backendIds.length} to ${node.name} (seed: ${seed})`);
-        
-        try {
-          // Create WebSocket connection for this node
-          const clientId = `storyboard-parallel-${panelId}-${i}-${Date.now()}`;
-          const nodeWs = getComfyUIWebSocket(node.url, clientId);
-          
-          try {
-            await nodeWs.connect();
-          } catch (wsError) {
-            addLog('warning', `WebSocket to ${node.name} failed, will use polling`);
-          }
-          
-          // Submit to this specific node
-          const response = await fetch(`${node.url}/prompt`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              prompt: workflowCopy,
-              client_id: clientId,
-            }),
-          });
-          
-          if (!response.ok) {
-            let errorDetail = `HTTP ${response.status}`;
-            try {
-              const errorData = await response.json();
-              console.error('ComfyUI error response:', errorData);
-              if (errorData.error) {
-                errorDetail = typeof errorData.error === 'string'
-                  ? errorData.error
-                  : JSON.stringify(errorData.error);
-              }
-            } catch (e) {
-              // Response wasn't JSON
-            }
-            throw new Error(errorDetail);
-          }
-          
-          const data = await response.json();
-          addLog('comfyui', `Queued on ${node.name}: ${data.prompt_id}`);
-          
-          // Update parallel job with prompt ID and seed
-          setPanels(prev => prev.map(p => {
-            if (p.id !== panelId || !p.parallelJobs) return p;
-            return {
-              ...p,
-              parallelJobs: p.parallelJobs.map(j =>
-                j.nodeId === backendId ? { ...j, promptId: data.prompt_id, seed, status: 'running' as const } : j
-              )
-            };
-          }));
-          
-          // Track this job
-          activeJobs.push({
-            nodeId: backendId,
-            nodeName: node.name,
-            promptId: data.prompt_id,
-            seed: seed
-          });
-          
-          // Track progress via WebSocket if connected, otherwise poll
-          if (nodeWs.connected) {
-            trackParallelJobWithWebSocket(data.prompt_id, panelId, backendId, node.url, nodeWs, clientId, parallelWfProgressInfo);
-          } else {
-            trackParallelJobWithPolling(data.prompt_id, panelId, backendId, node.url);
-          }
-          
-        } catch (error) {
-          const errorMsg = `Failed to submit to ${node.name}: ${error}`;
-          addLog('error', errorMsg);
-          showError(errorMsg);
-          // Update parallel job status to error
-          setPanels(prev => prev.map(p => {
-            if (p.id !== panelId || !p.parallelJobs) return p;
-            return {
-              ...p,
-              parallelJobs: p.parallelJobs.map(j =>
-                j.nodeId === backendId ? { ...j, status: 'error' as const } : j
-              )
-            };
-          }));
-        }
-      }
-      
-      if (activeJobs.length === 0) {
-        showError('Failed to submit to any nodes');
-        setPanels(prev => prev.map(p =>
-          p.id === panelId ? { ...p, status: 'error', progress: 0 } : p
-        ));
-        return;
-      }
-      
-      showInfo(`Started parallel generation on ${activeJobs.length} node(s)`);
+      batchSaveTriggeredRef.current.delete(String(panelId));
+      savedJobsRef.current.clear();
+
+      addLog('info', `Submitting job group to Orchestrator for ${backendIds.length} nodes...`);
+      const jobGroupResponse = await submitJobGroup({
+        workflow_json: baseWorkflow as Record<string, unknown>,
+        backend_ids: backendIds,
+        seed_strategy: 'random',
+        metadata: { panel_id: panelId, source: 'directors-console' },
+      });
+
+      const initialJobGroup: JobGroupWithCounts = {
+        id: jobGroupResponse.job_group_id,
+        panel_id: panelId,
+        child_jobs: jobGroupResponse.child_jobs,
+        status: jobGroupResponse.status,
+        seed_strategy: 'random',
+        base_seed: null,
+        timeout_seconds: 300,
+        metadata: { panel_id: panelId, source: 'directors-console' },
+        created_at: jobGroupResponse.created_at,
+        completed_at: null,
+        completed_count: 0,
+        failed_count: 0,
+        total_count: jobGroupResponse.child_jobs.length,
+      };
+      setActiveJobGroup(initialJobGroup);
+      activeJobGroupRef.current = initialJobGroup;
+      activeJobGroupPanelIdRef.current = panelId;
+      setParallelSelectedIndex(0);
+
+      // Sync panel.parallelJobs from actual child_jobs (real job_ids + seeds from Orchestrator)
+      setPanels(prev => prev.map(p =>
+        p.id === panelId ? {
+          ...p,
+          parallelJobs: jobGroupResponse.child_jobs.map(j => ({
+            nodeId: j.backend_id,
+            nodeName: renderNodes.find(n => n.id === j.backend_id)?.name || j.backend_id,
+            promptId: j.job_id,
+            seed: j.seed,
+            progress: 0,
+            status: 'pending' as const,
+          })),
+        } : p
+      ));
+
+      showInfo(`Started parallel generation on ${backendIds.length} nodes (group: ${jobGroupResponse.job_group_id.slice(0, 8)}...)`);
       
     } catch (error: any) {
       const errorMsg = `Parallel generation failed: ${error.message || String(error)}`;
@@ -3618,281 +3502,116 @@ export function StoryboardUI() {
     }
   }, [workflows, selectedWorkflowId, parameterValues, addLog, projectManager]);
 
-  /**
-   * Track a parallel job via WebSocket - updates individual job progress
-   * and batches saves when ALL jobs complete to avoid race conditions
-   */
-  // Note: panels removed from deps - uses panelsRef.current instead to avoid stale closures
-  const trackParallelJobWithWebSocket = useCallback((
-    promptId: string,
-    panelId: number,
-    nodeId: string,
-    targetUrl: string,
-    ws: ComfyUIWebSocket,
-    clientId?: string,
-    workflowInfo?: WorkflowProgressInfo
-  ) => {
-    // Helper to disconnect the per-generation WebSocket after completion
-    const cleanupWs = () => {
-      if (clientId) {
-        disconnectWebSocket(targetUrl, clientId);
-      }
-    };
-    
-    ws.trackPrompt(
-      promptId,
-      panelId,
-      // Progress callback - update this specific job's progress
-      (progress) => {
-        // Use overall percent when available (accounts for multi-sampler workflows)
-        const pct = progress.overallPercent ?? Math.round((progress.value / progress.max) * 100);
-        
-        // Build phase display string
-        const progressPhase = (progress.totalPhases && progress.totalPhases > 1)
-          ? `Phase ${progress.currentPhase}/${progress.totalPhases}`
-          : undefined;
-        
-        setPanels(prev => prev.map(p => {
-          if (p.id !== panelId || !p.parallelJobs) return p;
-          const updatedJobs = p.parallelJobs.map(j =>
-            j.nodeId === nodeId ? {
-              ...j,
-              progress: pct,
-              currentNodeName: progress.currentNodeName || j.currentNodeName,
-              progressPhase,
-              nodesExecuted: progress.nodesExecuted,
-              totalNodes: progress.totalNodes,
-            } : j
-          );
-          // Update overall panel progress as average of all jobs
-          const avgProgress = Math.round(
-            updatedJobs.reduce((sum, j) => sum + j.progress, 0) / updatedJobs.length
-          );
-          return { ...p, parallelJobs: updatedJobs, progress: avgProgress };
-        }));
-      },
-      // Completed callback - store result URL and check if all jobs done
-      async (_promptId, _outputs) => {
-        addLog('comfyui', `Parallel job complete on node ${nodeId} for panel ${panelId}`);
-        
-        // Fetch result from history
-        try {
-          const historyResponse = await fetch(`${targetUrl}/history/${promptId}`);
-          if (!historyResponse.ok) throw new Error(`HTTP ${historyResponse.status}`);
-          
-          const historyData = await historyResponse.json();
-          const promptData = historyData[promptId];
-          
-          if (promptData?.outputs) {
-            // Collect media URL from first output (images, gifs, or videos)
-            let resultUrl: string | undefined;
-            for (const nodeIdKey of Object.keys(promptData.outputs)) {
-              const output = promptData.outputs[nodeIdKey];
-              const mediaOutputs = extractMediaOutputs(output, targetUrl);
-              if (mediaOutputs.length > 0) {
-                resultUrl = mediaOutputs[0].url;
-                break;
-              }
-            }
-            
-            if (resultUrl) {
-              // Update this job's result URL and status
-              setPanels(prev => prev.map(p => {
-                if (p.id !== panelId || !p.parallelJobs) return p;
-                const updatedJobs = p.parallelJobs.map(j =>
-                  j.nodeId === nodeId ? { ...j, status: 'complete' as const, progress: 100, resultUrl } : j
-                );
-                
-                // NEW: Save this individual result immediately (don't wait for all)
-                // Find the updated job to pass to save function
-                const completedJob = updatedJobs.find(j => j.nodeId === nodeId);
-                if (completedJob && completedJob.resultUrl) {
-                  // Use setTimeout to avoid state update conflicts
-                  setTimeout(() => {
-                    saveIndividualParallelResult(panelId, {
-                      nodeId: completedJob.nodeId,
-                      nodeName: completedJob.nodeName,
-                      resultUrl: completedJob.resultUrl!,
-                      seed: completedJob.seed
-                    });
-                  }, 0);
-                }
-                
-                // Check if ALL jobs are in terminal state (for cleanup/logging only, not batch save)
-                const allTerminal = updatedJobs.every(j =>
-                  j.status === 'complete' || j.status === 'error' || j.status === 'cancelled'
-                );
-                
-                if (allTerminal) {
-                  // All jobs done - just log completion (images already saved individually)
-                  const completeCount = updatedJobs.filter(j => j.status === 'complete').length;
-                  addLog('info', `All parallel jobs finished! ${completeCount} successful, ${updatedJobs.length - completeCount} failed`);
-                  
-                  // Clear parallel jobs state
-                  return { 
-                    ...p, 
-                    parallelJobs: updatedJobs, 
-                    status: completeCount > 0 ? 'complete' : 'error',
-                    batchSaveTriggered: true
-                  };
-                }
-                
-                return { ...p, parallelJobs: updatedJobs };
-              }));
-              cleanupWs();
-            }
-          }
-        } catch (error) {
-          addLog('error', `Error fetching parallel result: ${error}`);
-          setPanels(prev => prev.map(p => {
-            if (p.id !== panelId || !p.parallelJobs) return p;
-            return {
-              ...p,
-              parallelJobs: p.parallelJobs.map(j =>
-                j.nodeId === nodeId ? { ...j, status: 'error' as const } : j
-              )
-            };
-          }));
-          cleanupWs();
-        }
-      },
-      // Error callback
-      (_promptId, error) => {
-        addLog('error', `Parallel job failed on node ${nodeId}: ${error}`);
-        setPanels(prev => prev.map(p => {
-          if (p.id !== panelId || !p.parallelJobs) return p;
-          return {
-            ...p,
-            parallelJobs: p.parallelJobs.map(j =>
-              j.nodeId === nodeId ? { ...j, status: 'error' as const } : j
-            )
-          };
-        }));
-        cleanupWs();
-      },
-      // Workflow info for multi-phase progress tracking
-      workflowInfo
-    );
-  }, [addLog, saveIndividualParallelResult]);
-  
-  /**
-   * Track a parallel job via polling (fallback when WebSocket fails)
-   */
-  const trackParallelJobWithPolling = useCallback(async (
-    promptId: string,
-    panelId: number,
-    nodeId: string,
-    targetUrl: string
-  ) => {
-    const maxAttempts = 600;
-    let attempts = 0;
-    
-    const checkStatus = async () => {
-      if (attempts >= maxAttempts) {
-        addLog('error', `Parallel job timeout on node ${nodeId}`);
-        setPanels(prev => prev.map(p => {
-          if (p.id !== panelId || !p.parallelJobs) return p;
-          return {
-            ...p,
-            parallelJobs: p.parallelJobs.map(j =>
-              j.nodeId === nodeId ? { ...j, status: 'error' as const } : j
-            )
-          };
-        }));
-        return;
-      }
-      
-      attempts++;
-      
-      try {
-        const historyResponse = await fetch(`${targetUrl}/history/${promptId}`);
-        if (historyResponse.ok) {
-          const history = await historyResponse.json();
-          
-          if (history[promptId]?.outputs) {
-            // Job complete - extract result (images, gifs, or videos)
-            let resultUrl: string | undefined;
-            for (const nodeIdKey of Object.keys(history[promptId].outputs)) {
-              const output = history[promptId].outputs[nodeIdKey];
-              const mediaOutputs = extractMediaOutputs(output, targetUrl);
-              if (mediaOutputs.length > 0) {
-                resultUrl = mediaOutputs[0].url;
-                break;
-              }
-            }
-            
-            if (resultUrl) {
-              setPanels(prev => prev.map(p => {
-                if (p.id !== panelId || !p.parallelJobs) return p;
-                const updatedJobs = p.parallelJobs.map(j =>
-                  j.nodeId === nodeId ? { ...j, status: 'complete' as const, progress: 100, resultUrl } : j
-                );
-                
-                // NEW: Save this individual result immediately (don't wait for all)
-                // Find the updated job to pass to save function
-                const completedJob = updatedJobs.find(j => j.nodeId === nodeId);
-                if (completedJob && completedJob.resultUrl) {
-                  // Use setTimeout to avoid state update conflicts
-                  setTimeout(() => {
-                    saveIndividualParallelResult(panelId, {
-                      nodeId: completedJob.nodeId,
-                      nodeName: completedJob.nodeName,
-                      resultUrl: completedJob.resultUrl!,
-                      seed: completedJob.seed
-                    });
-                  }, 0);
-                }
-                
-                // Check if ALL jobs are in terminal state (for cleanup/logging only, not batch save)
-                const allTerminal = updatedJobs.every(j =>
-                  j.status === 'complete' || j.status === 'error' || j.status === 'cancelled'
-                );
-                
-                if (allTerminal) {
-                  // All jobs done - just log completion (images already saved individually)
-                  const completeCount = updatedJobs.filter(j => j.status === 'complete').length;
-                  addLog('info', `All parallel jobs finished! ${completeCount} successful, ${updatedJobs.length - completeCount} failed`);
-                  
-                  // Clear parallel jobs state
-                  return { 
-                    ...p, 
-                    parallelJobs: updatedJobs, 
-                    status: completeCount > 0 ? 'complete' : 'error',
-                    batchSaveTriggered: true
-                  };
-                }
-                
-                return { ...p, parallelJobs: updatedJobs };
-              }));
-              return;
-            }
-          }
-        }
-        
-        // Update progress estimate
-        const progress = Math.min((attempts / 100) * 100, 90);
-        setPanels(prev => prev.map(p => {
-          if (p.id !== panelId || !p.parallelJobs) return p;
-          return {
-            ...p,
-            parallelJobs: p.parallelJobs.map(j =>
-              j.nodeId === nodeId ? { ...j, progress } : j
-            )
-          };
-        }));
-        
-        setTimeout(checkStatus, 1000);
-      } catch (error) {
-        addLog('error', `Error polling parallel result: ${error}`);
-        setTimeout(checkStatus, 1000);
-      }
-    };
-    
-    checkStatus();
-  }, [addLog, saveIndividualParallelResult]);
-  
-  // Note: Individual job cancel/retry functions and batchSaveParallelResults removed
-  // Functionality now handled through streaming individual saves via saveIndividualParallelResult
+  // ---------------------------------------------------------------------------
+  // Parallel generation - Orchestrator job-group WebSocket callbacks
+  // All handlers read from refs to avoid stale closures.
+  // ---------------------------------------------------------------------------
+
+  const handleChildProgress = useCallback((jobId: string, progress: number) => {
+    setActiveJobGroup(prev => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        child_jobs: prev.child_jobs.map(j =>
+          j.job_id === jobId ? { ...j, progress, status: 'running' as const } : j
+        ),
+      };
+      activeJobGroupRef.current = updated;
+      return updated;
+    });
+    const panelId = activeJobGroupPanelIdRef.current;
+    if (panelId === null) return;
+    setPanels(prev => prev.map(p => {
+      if (p.id !== panelId || !p.parallelJobs) return p;
+      const updatedJobs = p.parallelJobs.map(j => {
+        const match = activeJobGroupRef.current?.child_jobs.find(cj => cj.job_id === jobId && cj.backend_id === j.nodeId);
+        return match ? { ...j, progress, status: 'running' as const } : j;
+      });
+      const avgProgress = Math.round(updatedJobs.reduce((s, j) => s + j.progress, 0) / updatedJobs.length);
+      return { ...p, parallelJobs: updatedJobs, progress: avgProgress };
+    }));
+  }, []);
+
+  const handleChildCompleted = useCallback(async (jobId: string, outputs: unknown) => {
+    const jobGroup = activeJobGroupRef.current;
+    const panelId = activeJobGroupPanelIdRef.current;
+    if (!jobGroup || panelId === null) return;
+    const job = jobGroup.child_jobs.find(j => j.job_id === jobId);
+    if (!job) return;
+    const outs = outputs as ChildJobOutputs | null;
+    const resultUrl = outs?.images?.[0]?.url;
+    setActiveJobGroup(prev => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        child_jobs: prev.child_jobs.map(j =>
+          j.job_id === jobId ? { ...j, status: 'completed' as const, progress: 100, outputs: outs } : j
+        ),
+        completed_count: prev.completed_count + 1,
+      };
+      activeJobGroupRef.current = updated;
+      return updated;
+    });
+    if (resultUrl) {
+      const nodeName = orchestratorManager.getNodes().find(n => n.id === job.backend_id)?.name ?? job.backend_id;
+      await saveIndividualParallelResult(panelId, {
+        nodeId: job.backend_id,
+        nodeName,
+        resultUrl,
+        seed: job.seed,
+      });
+    }
+  }, [saveIndividualParallelResult]);
+
+  const handleChildFailed = useCallback((jobId: string, error: string) => {
+    const panelId = activeJobGroupPanelIdRef.current;
+    setActiveJobGroup(prev => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        child_jobs: prev.child_jobs.map(j =>
+          j.job_id === jobId ? { ...j, status: 'failed' as const, error_message: error } : j
+        ),
+        failed_count: prev.failed_count + 1,
+      };
+      activeJobGroupRef.current = updated;
+      return updated;
+    });
+    if (panelId !== null) {
+      setPanels(prev => prev.map(p => {
+        if (p.id !== panelId || !p.parallelJobs) return p;
+        const childJob = activeJobGroupRef.current?.child_jobs.find(cj => cj.job_id === jobId);
+        if (!childJob) return p;
+        return {
+          ...p,
+          parallelJobs: p.parallelJobs.map(j =>
+            j.nodeId === childJob.backend_id ? { ...j, status: 'error' as const } : j
+          ),
+        };
+      }));
+    }
+    addLog('error', `Parallel job failed: ${error}`);
+  }, [addLog]);
+
+  const handleGroupComplete = useCallback((succeeded: number, _failed: number, total: number) => {
+    addLog('info', `Parallel generation complete: ${succeeded}/${total} succeeded`);
+    if (succeeded === 0) showError('All parallel jobs failed');
+    setActiveJobGroup(prev => {
+      if (!prev) return prev;
+      const status: JobGroupStatus = succeeded === 0 ? 'failed' : succeeded === total ? 'completed' : 'partial_complete';
+      const updated = { ...prev, status };
+      activeJobGroupRef.current = updated;
+      return updated;
+    });
+  }, [addLog, showError]);
+
+  useJobGroupWebSocket(activeJobGroup?.id ?? null, {
+    autoConnect: true,
+    onChildProgress: handleChildProgress,
+    onChildCompleted: handleChildCompleted,
+    onChildFailed: handleChildFailed,
+    onGroupComplete: handleGroupComplete,
+  });
 
   // ---------------------------------------------------------------------------
   // Functions - Parameter Updates
@@ -7771,6 +7490,18 @@ export function StoryboardUI() {
         );
       })()}
       */}
+
+      {activeJobGroup && (
+        <ParallelResultsView
+          jobGroup={activeJobGroup}
+          selectedIndex={parallelSelectedIndex}
+          onResultSelect={(_job, index) => setParallelSelectedIndex(index)}
+          onClose={() => {
+            setActiveJobGroup(null);
+            activeJobGroupRef.current = null;
+          }}
+        />
+      )}
     </div>
   );
 }
