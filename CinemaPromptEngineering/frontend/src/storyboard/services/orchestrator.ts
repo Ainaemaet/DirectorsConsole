@@ -43,11 +43,13 @@ class OrchestratorManager {
   private pollingInterval: number | null = null;
   private nodeWebSockets: Map<string, ComfyUIWebSocket> = new Map();
   private removedNodeIds: Set<string> = new Set(); // Track manually removed nodes to prevent API from re-adding them
+  private orchestratorUrl: string = '';
 
   /**
    * Fetch backends from Orchestrator API
    */
   async fetchBackendsFromAPI(orchestratorUrl: string): Promise<void> {
+    this.orchestratorUrl = orchestratorUrl;
     try {
       const response = await fetch(`${orchestratorUrl}/api/backends`);
       if (!response.ok) {
@@ -475,9 +477,8 @@ class OrchestratorManager {
   }
 
   /**
-   * Restart a ComfyUI backend by calling its REST API directly
-   * Interrupts any running jobs and frees memory
-   * 
+   * Restart a ComfyUI backend via the Orchestrator API.
+   *
    * @param backendId - The ID of the backend to restart
    * @param options - Restart options (interrupt_jobs, free_memory)
    * @returns Promise resolving to success status and message
@@ -486,78 +487,35 @@ class OrchestratorManager {
     backendId: string,
     options: { interrupt_jobs?: boolean; free_memory?: boolean } = {}
   ): Promise<{ success: boolean; message: string }> {
-    const node = this.nodes.get(backendId);
-    if (!node) {
-      return {
-        success: false,
-        message: `Backend ${backendId} not found`,
-      };
+    if (!this.nodes.has(backendId)) {
+      return { success: false, message: `Backend ${backendId} not found` };
+    }
+
+    if (!this.orchestratorUrl) {
+      return { success: false, message: 'Orchestrator URL not configured' };
     }
 
     try {
-      console.log(`[Orchestrator] Restarting ComfyUI backend ${backendId} at ${node.url}`);
-      
-      // Step 1: Interrupt any running jobs
-      if (options.interrupt_jobs !== false) {
-        try {
-          const interruptResponse = await fetch(`${node.url}/interrupt`, {
-            method: 'POST',
-          });
-          if (!interruptResponse.ok) {
-            console.warn(`[Orchestrator] Interrupt failed for ${backendId}: ${interruptResponse.status}`);
-          } else {
-            console.log(`[Orchestrator] Interrupted jobs on ${backendId}`);
-          }
-        } catch (e) {
-          console.warn(`[Orchestrator] Failed to interrupt ${backendId}:`, e);
-        }
-      }
+      console.log(`[Orchestrator] Restarting backend ${backendId} via Orchestrator API`);
+      const response = await fetch(`${this.orchestratorUrl}/api/backends/${backendId}/restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          interrupt_jobs: options.interrupt_jobs ?? true,
+          free_memory: options.free_memory ?? true,
+        }),
+      });
 
-      // Step 2: Free memory and unload models
-      if (options.free_memory !== false) {
-        try {
-          const freeResponse = await fetch(`${node.url}/free`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              unload_models: true,
-              free_memory: true 
-            }),
-          });
-          if (!freeResponse.ok) {
-            console.warn(`[Orchestrator] Free memory failed for ${backendId}: ${freeResponse.status}`);
-          } else {
-            console.log(`[Orchestrator] Freed memory on ${backendId}`);
-          }
-        } catch (e) {
-          console.warn(`[Orchestrator] Failed to free memory on ${backendId}:`, e);
-        }
-      }
-
-      // Step 3: Verify the backend is still responsive
-      try {
-        const healthResponse = await fetch(`${node.url}/system_stats`, {
-          method: 'GET',
-        });
-        
-        if (healthResponse.ok) {
-          console.log(`[Orchestrator] Backend ${backendId} health check passed`);
-          return {
-            success: true,
-            message: 'ComfyUI backend restarted successfully. Jobs interrupted, memory freed.',
-          };
-        } else {
-          return {
-            success: false,
-            message: `Health check failed with status ${healthResponse.status}`,
-          };
-        }
-      } catch (e) {
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
         return {
           success: false,
-          message: `Health check failed: ${e instanceof Error ? e.message : 'Unknown error'}`,
+          message: detail.detail || `Orchestrator returned ${response.status}`,
         };
       }
+
+      const data = await response.json();
+      return { success: data.success, message: data.message };
     } catch (error) {
       console.error(`[Orchestrator] Error restarting backend ${backendId}:`, error);
       return {

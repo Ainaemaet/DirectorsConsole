@@ -763,14 +763,7 @@ class ProjectManager {
       
       const result = await response.json();
       console.log('[ProjectManager] scanExistingVersions - response:', JSON.stringify(result));
-      
-      // CHECK FOR DEBUG MODE SIGNAL FROM BACKEND
-      if (result.message && result.message.includes('🚨 DEBUG_CODE_RUNNING 🚨')) {
-        console.log('%c🚨🚨🚨 DEBUG CODE IS RUNNING! 🚨🚨🚨', 'background: #ff0000; color: #ffffff; font-size: 20px; font-weight: bold; padding: 10px;');
-        console.log('%cThis means server.py dummy code executed successfully!', 'background: #00aa00; color: #ffffff; font-size: 16px; padding: 5px;');
-        console.log('Message from server:', result.message);
-      }
-      
+
       // Backend returns versions as strings ("001", "002"), convert to numbers for internal use
       const panelVersions: Record<string, number> = {};
       if (result.panel_versions) {

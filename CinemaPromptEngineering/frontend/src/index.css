@@ -1142,7 +1142,7 @@ input:focus-visible {
 }
 
 /* Resize handle - scoped to .preset-panel to avoid collision with Storyboard panel handles.
-   Uses !important to override unscoped .panel-resize-handle in DraggablePanel.css & PanelHeader.css */
+   Uses !important to override unscoped .panel-resize-handle in PanelHeader.css */
 .preset-panel > .panel-resize-handle {
   position: absolute !important;
   left: 0 !important;

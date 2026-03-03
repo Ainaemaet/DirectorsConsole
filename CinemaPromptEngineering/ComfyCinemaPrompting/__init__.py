@@ -4,10 +4,11 @@ import sys
 import os
 from enum import Enum
 
-# Add current directory to sys.path to allow imports from cinema_rules package
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+# Add the CinemaPromptEngineering parent directory to sys.path so that
+# `import cinema_rules` resolves to the canonical CinemaPromptEngineering/cinema_rules package.
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 class _PlaceholderEnum(Enum):
     UNAVAILABLE = "Unavailable"

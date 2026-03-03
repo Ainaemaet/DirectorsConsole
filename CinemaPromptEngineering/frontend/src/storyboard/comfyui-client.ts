@@ -300,9 +300,8 @@ export class ComfyUIClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        workflow,
-        source: 'directors-console',
-        client_id: this.clientId,
+        workflow_json: workflow,
+        metadata: { source: 'directors-console', client_id: this.clientId },
       }),
     });
 
