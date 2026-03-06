@@ -23,6 +23,7 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
   const [bypassGroupApplyMode, setBypassGroupApplyMode] = useState<'replace' | 'merge'>(
     settings.bypassGroupApplyMode ?? 'replace'
   );
+  const [comfyUiPath, setComfyUiPath] = useState(settings.comfyUiPath ?? '');
   const [orchestratorUrl, setOrchestratorUrl] = useState(settings.orchestratorUrl || getDefaultOrchestratorUrl());
   const [orchestratorStatus, setOrchestratorStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
@@ -41,6 +42,7 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
       setNamingTemplate(settings.namingTemplate);
       setAutoSave(settings.autoSave);
       setBypassGroupApplyMode(settings.bypassGroupApplyMode ?? 'replace');
+      setComfyUiPath(settings.comfyUiPath ?? '');
       setOrchestratorUrl(settings.orchestratorUrl || getDefaultOrchestratorUrl());
     }
   }, [isOpen, settings]);
@@ -67,7 +69,7 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
   if (!isOpen) return null;
   
   const handleSave = () => {
-    onSave({ name, path, namingTemplate, autoSave, orchestratorUrl, bypassGroupApplyMode });
+    onSave({ name, path, namingTemplate, autoSave, orchestratorUrl, bypassGroupApplyMode, comfyUiPath });
     onClose();
   };
 
@@ -233,6 +235,24 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
               <small className="help-text">
                 Off (default): applying a group resets all other nodes to Active first.
                 On: only nodes listed in the group are changed; others keep their current mode.
+              </small>
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <h3>Model Browser</h3>
+            <div className="form-group">
+              <label htmlFor="comfy-ui-path">ComfyUI Installation Path</label>
+              <input
+                id="comfy-ui-path"
+                type="text"
+                value={comfyUiPath}
+                onChange={(e) => setComfyUiPath(e.target.value)}
+                placeholder="/home/user/ComfyUI"
+              />
+              <small className="help-text">
+                Path to your ComfyUI directory. Used to read{' '}
+                <code>extra_model_paths.yaml</code> and discover model folders.
               </small>
             </div>
           </div>

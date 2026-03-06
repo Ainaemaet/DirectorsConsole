@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { CinemaPromptEngineering } from './CinemaPromptEngineering';
 import { StoryboardUI } from './StoryboardUI';
 import { GalleryUI } from './gallery';
+import { ModelBrowserUI } from './model-browser';
 import OAuthCallback from '@/components/OAuthCallback';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './App.css';
@@ -11,7 +12,7 @@ const isOAuthCallback = window.location.pathname.includes('/oauth/callback') ||
                          window.location.search.includes('code=') ||
                          window.location.search.includes('error=');
 
-type TabId = 'cinema' | 'storyboard' | 'gallery';
+type TabId = 'cinema' | 'storyboard' | 'gallery' | 'models';
 
 interface Tab {
   id: TabId;
@@ -23,6 +24,7 @@ const TABS: Tab[] = [
   { id: 'cinema', label: 'Cinema Prompt Engineering', icon: '🎬' },
   { id: 'storyboard', label: 'Storyboard', icon: '📋' },
   { id: 'gallery', label: 'Gallery', icon: '🖼️' },
+  { id: 'models', label: 'Models', icon: '🧠' },
 ];
 
 function DirectorsConsole() {
@@ -51,6 +53,16 @@ function DirectorsConsole() {
     } catch { /* ignore */ }
     return '';
   });
+  const [modelBrowserComfyUiPath, setModelBrowserComfyUiPath] = useState(() => {
+    try {
+      const saved = localStorage.getItem('storyboard_project_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.comfyUiPath || '';
+      }
+    } catch { /* ignore */ }
+    return '';
+  });
 
   useEffect(() => {
     const handler = (e: Event) =>
@@ -60,8 +72,8 @@ function DirectorsConsole() {
   }, []);
 
   useEffect(() => {
-    // Only poll for project setting changes while Gallery tab is active
-    if (activeTab !== 'gallery') return;
+    // Poll for project setting changes while Gallery or Models tab is active
+    if (activeTab !== 'gallery' && activeTab !== 'models') return;
 
     const loadProjectSettings = () => {
       try {
@@ -70,6 +82,7 @@ function DirectorsConsole() {
           const parsed = JSON.parse(saved);
           if (parsed.path) setGalleryProjectPath(parsed.path);
           if (parsed.orchestratorUrl) setGalleryOrchestratorUrl(parsed.orchestratorUrl);
+          if (parsed.comfyUiPath !== undefined) setModelBrowserComfyUiPath(parsed.comfyUiPath || '');
         }
       } catch { /* ignore */ }
     };
@@ -116,6 +129,11 @@ function DirectorsConsole() {
         <div style={{ display: activeTab === 'gallery' ? 'contents' : 'none' }}>
           <ErrorBoundary>
             <GalleryUI orchestratorUrl={galleryOrchestratorUrl} projectPath={galleryProjectPath} isActive={activeTab === 'gallery'} />
+          </ErrorBoundary>
+        </div>
+        <div style={{ display: activeTab === 'models' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <ErrorBoundary>
+            <ModelBrowserUI orchestratorUrl={galleryOrchestratorUrl} comfyUiPath={modelBrowserComfyUiPath} isActive={activeTab === 'models'} />
           </ErrorBoundary>
         </div>
       </main>

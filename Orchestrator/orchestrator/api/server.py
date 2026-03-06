@@ -40,6 +40,7 @@ from orchestrator.core.models.job import Job, JobStatus
 # Import job group modules
 from orchestrator.api import job_groups, ws_job_groups
 from orchestrator.api import gallery_routes
+from orchestrator.api import model_browser_routes
 from orchestrator.core.parallel_job_manager import ParallelJobManager
 
 # Cross-platform path translation
@@ -288,6 +289,9 @@ app.include_router(ws_job_groups.router)
 
 # Include gallery router
 app.include_router(gallery_routes.router)
+
+# Include model browser router
+app.include_router(model_browser_routes.router)
 
 # Global reference to JobManager (set via set_job_manager)
 _job_manager: Any = None
