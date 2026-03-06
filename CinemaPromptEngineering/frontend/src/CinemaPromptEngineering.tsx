@@ -2073,6 +2073,14 @@ function App() {
   } = useCinemaStore();
 
   const [isGenerating, setIsGenerating] = useState(false);
+  const [storyboardSendFeedback, setStoryboardSendFeedback] = useState(false);
+
+  const handleSendToStoryboard = (prompt: string) => {
+    setCpePromptForStoryboard(prompt);
+    setStoryboardSendFeedback(true);
+    setTimeout(() => setStoryboardSendFeedback(false), 3000);
+    window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'storyboard' }));
+  };
   const [isLoadingPresets, setIsLoadingPresets] = useState(false);
   const [isApplyingPreset, setIsApplyingPreset] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
@@ -2794,9 +2802,9 @@ function App() {
               >
                 Copy Simple Prompt
               </button>
-              <button 
-                className="secondary" 
-                onClick={() => setCpePromptForStoryboard(generatedPrompt)}
+              <button
+                className="secondary"
+                onClick={() => handleSendToStoryboard(generatedPrompt)}
                 disabled={!generatedPrompt}
                 title="Send this prompt to the Storyboard panel"
                 style={{
@@ -2815,6 +2823,11 @@ function App() {
                 📋 Send to Storyboard
               </button>
             </div>
+            {storyboardSendFeedback && (
+              <div style={{ color: 'var(--accent-success, #4caf50)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                ✓ Prompt staged — click 🎬 in the Storyboard prompt field
+              </div>
+            )}
           </div>
 
           {/* Right: AI-Enhanced Prompt */}
@@ -2863,9 +2876,9 @@ function App() {
               >
                 Copy Enhanced Prompt
               </button>
-              <button 
-                className="secondary" 
-                onClick={() => setCpePromptForStoryboard(enhancedPrompt)}
+              <button
+                className="secondary"
+                onClick={() => handleSendToStoryboard(enhancedPrompt)}
                 disabled={!enhancedPrompt}
                 title="Send this prompt to the Storyboard panel"
                 style={{
@@ -2884,6 +2897,11 @@ function App() {
                 📋 Send to Storyboard
               </button>
             </div>
+            {storyboardSendFeedback && (
+              <div style={{ color: 'var(--accent-success, #4caf50)', fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                ✓ Prompt staged — click 🎬 in the Storyboard prompt field
+              </div>
+            )}
           </div>
         </div>
 

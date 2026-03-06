@@ -347,7 +347,6 @@ export function StoryboardUI() {
   const [marqueeStart, setMarqueeStart] = useState({ x: 0, y: 0 });
   const [marqueeEnd, setMarqueeEnd] = useState({ x: 0, y: 0 });
   const [snapGuides, setSnapGuides] = useState<Array<{ type: 'vertical' | 'horizontal'; position: number }>>([]);
-  const [, setConfirmDelete] = useState<{ open: boolean; title: string; message: string; onConfirm: () => void; onCancel: () => void } | null>(null);
   const [_isShiftPressed, setIsShiftPressed] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [pendingFolderName, setPendingFolderName] = useState('');
@@ -646,32 +645,17 @@ export function StoryboardUI() {
     const panel = panels.find(p => p.id === panelId);
     if (!panel) return;
 
-    // Check if panel has generated images
-    const hasImages = panel.imageHistory.length > 0;
-    
-    if (hasImages) {
-      // Show confirmation dialog
-      setConfirmDelete({
-        open: true,
-        title: 'Remove Panel',
-        message: `Remove "${panel.name || `Panel_${String(panelId).padStart(2, '0')}`}"?\n\nThis panel has ${panel.imageHistory.length} generated image(s). This action cannot be undone.`,
-        onConfirm: () => {
-          setPanels(prev => prev.filter(p => p.id !== panelId));
-          if (selectedPanelId === panelId) {
-            const remaining = panels.filter(p => p.id !== panelId);
-            setSelectedPanelId(remaining.length > 0 ? remaining[0].id : null);
-          }
-          setConfirmDelete(null);
-        },
-        onCancel: () => setConfirmDelete(null),
-      });
-    } else {
-      // Remove immediately if no images
-      setPanels(prev => prev.filter(p => p.id !== panelId));
-      if (selectedPanelId === panelId) {
-        const remaining = panels.filter(p => p.id !== panelId);
-        setSelectedPanelId(remaining.length > 0 ? remaining[0].id : null);
-      }
+    if (panel.imageHistory.length > 0) {
+      const name = panel.name || `Panel_${String(panelId).padStart(2, '0')}`;
+      if (!window.confirm(
+        `Remove "${name}"?\n\nThis panel has ${panel.imageHistory.length} image(s). This cannot be undone.`
+      )) return;
+    }
+
+    setPanels(prev => prev.filter(p => p.id !== panelId));
+    if (selectedPanelId === panelId) {
+      const remaining = panels.filter(p => p.id !== panelId);
+      setSelectedPanelId(remaining.length > 0 ? remaining[0].id : null);
     }
   }, [panels, selectedPanelId]);
 
@@ -4051,14 +4035,20 @@ export function StoryboardUI() {
       
       // Restore selected workflow
       if (result.state.selected_workflow_id) {
-        setSelectedWorkflowId(result.state.selected_workflow_id);
+        const workflowId = result.state.selected_workflow_id;
+        setSelectedWorkflowId(workflowId);
+        const wf = workflows.find(w => w.id === workflowId);
+        if (wf) {
+          setActiveTab(wf.category);
+          setActiveSubTab(wf.subCategory);
+        }
       }
-      
+
       // Restore ComfyUI URL if available
       if (result.state.comfy_url) {
         setComfyUrl(result.state.comfy_url);
       }
-      
+
       setLoadingProgress({ progress: 100, currentFile: 'Complete!' });
       
       // Calculate total images
@@ -4301,7 +4291,13 @@ export function StoryboardUI() {
       }
       // Restore selected workflow
       if (result.state.selected_workflow_id) {
-        setSelectedWorkflowId(result.state.selected_workflow_id);
+        const workflowId = result.state.selected_workflow_id;
+        setSelectedWorkflowId(workflowId);
+        const wf = workflows.find(w => w.id === workflowId);
+        if (wf) {
+          setActiveTab(wf.category);
+          setActiveSubTab(wf.subCategory);
+        }
       }
       // Note: renderNodes are managed by useRenderNodes hook and restored via localStorage
       // Restore ComfyUI URL if available
