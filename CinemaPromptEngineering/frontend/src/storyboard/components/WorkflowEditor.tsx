@@ -26,7 +26,7 @@ interface WorkflowEditorProps {
   parsedWorkflow: ParsedWorkflow | null;
   initialConfig?: ParameterConfig[];
   comfyUrl?: string; // URL to fetch node definitions
-  onSave: (config: ParameterConfig[]) => void;
+  onSave: (config: ParameterConfig[], nodeModes: Record<string, number>) => void;
   onCancel: () => void;
 }
 
@@ -67,6 +67,7 @@ interface NodeInfo {
   id: string;
   class_type: string;
   title: string;
+  mode: number; // 0=active, 2=muted, 4=bypassed
   inputs: Array<{
     name: string;
     value: any;
@@ -183,7 +184,17 @@ export function WorkflowEditor({
   const draggedIndexRef = useRef<number | null>(null);
   const [nodeDefsLoaded, setNodeDefsLoaded] = useState(false);
   const [availableLoras, setAvailableLoras] = useState<string[]>([]);
-  
+  const [localNodeModes, setLocalNodeModes] = useState<Record<string, number>>(() => {
+    if (!workflow) return {};
+    const modes: Record<string, number> = {};
+    for (const [id, node] of Object.entries(workflow)) {
+      if (id === 'meta' || typeof node !== 'object' || node === null) continue;
+      const m = (node as any).mode as number | undefined;
+      if (m && m !== 0) modes[id] = m;
+    }
+    return modes;
+  });
+
   // Fetch node definitions and available LoRAs when comfyUrl is available
   useEffect(() => {
     if (comfyUrl && !nodeDefsLoaded) {
@@ -354,16 +365,18 @@ export function WorkflowEditor({
         }
       }
       
-      if (inputs.length > 0) {
-        nodes.push({
-          id: nodeId,
-          class_type: typedNode.class_type || 'Unknown',
-          title: typedNode._meta?.title || typedNode.class_type || `Node ${nodeId}`,
-          inputs,
-        });
-      }
+      // Include all nodes with a class_type — even those with only connection inputs
+      // so the user can bypass/mute any node regardless of exposable inputs
+      if (!typedNode.class_type) continue;
+      nodes.push({
+        id: nodeId,
+        class_type: typedNode.class_type || 'Unknown',
+        title: typedNode._meta?.title || typedNode.class_type || `Node ${nodeId}`,
+        mode: (typedNode.mode as number) ?? 0,
+        inputs,
+      });
     }
-    
+
     return nodes;
   }, [workflow, configs]);
   
@@ -496,8 +509,8 @@ export function WorkflowEditor({
   const handleSave = useCallback(() => {
     // Sort by order before saving
     const sortedConfigs = [...configs].sort((a, b) => a.order - b.order);
-    onSave(sortedConfigs);
-  }, [configs, onSave]);
+    onSave(sortedConfigs, localNodeModes);
+  }, [configs, onSave, localNodeModes]);
   
   // Get all nodes for the "all" tab
   const allNodes = extractAllNodes();
@@ -599,6 +612,11 @@ export function WorkflowEditor({
                 key={node.id}
                 node={node}
                 onAddParameter={(inputName, value) => addParameter(node.id, inputName, value)}
+                currentMode={localNodeModes[node.id] ?? 0}
+                onModeChange={(nodeId, mode) => {
+                  setLocalNodeModes(prev => ({ ...prev, [nodeId]: mode }));
+                  setHasChanges(true);
+                }}
               />
             ))}
           </div>
@@ -871,33 +889,56 @@ function ParameterConfigCard({
 interface NodeCardProps {
   node: NodeInfo;
   onAddParameter: (inputName: string, value: any) => void;
+  currentMode: number;
+  onModeChange: (nodeId: string, mode: number) => void;
 }
 
-function NodeCard({ node, onAddParameter }: NodeCardProps) {
+function NodeCard({ node, onAddParameter, currentMode, onModeChange }: NodeCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  
+  const modeClass = currentMode === 4 ? 'bypassed' : currentMode === 2 ? 'muted' : '';
+
   return (
-    <div className="node-card">
+    <div className={`node-card${modeClass ? ` ${modeClass}` : ''}`}>
       <div className="node-header" onClick={() => setIsExpanded(!isExpanded)}>
         <span className="node-toggle">{isExpanded ? '▼' : '▶'}</span>
         <div className="node-info">
           <span className="node-title">{node.title}</span>
           <span className="node-type">{node.class_type}</span>
         </div>
-        <span className="node-id">ID: {node.id}</span>
+        <span className="node-id">#{node.id}</span>
+        <div className="node-mode-controls" onClick={e => e.stopPropagation()}>
+          <button
+            className={`node-mode-btn${currentMode === 0 ? ' active' : ''}`}
+            onClick={() => onModeChange(node.id, 0)}
+            title="Active — node executes normally"
+          >▶</button>
+          <button
+            className={`node-mode-btn${currentMode === 4 ? ' bypass' : ''}`}
+            onClick={() => onModeChange(node.id, 4)}
+            title="Bypass — skip node, pass inputs through to outputs"
+          >⏭</button>
+          <button
+            className={`node-mode-btn${currentMode === 2 ? ' mute' : ''}`}
+            onClick={() => onModeChange(node.id, 2)}
+            title="Mute — skip node, outputs become null"
+          >⏸</button>
+        </div>
       </div>
-      
+
       {isExpanded && (
         <div className="node-inputs">
+          {node.inputs.length === 0 && (
+            <div className="node-no-inputs">No configurable inputs</div>
+          )}
           {node.inputs.map((input) => (
             <div key={input.name} className={`node-input ${input.exposed ? 'exposed' : ''}`}>
               <div className="input-info">
                 <span className="input-name">{input.name}</span>
                 <span className="input-type">{input.type}</span>
                 <span className="input-value">{String(input.value).slice(0, 50)}</span>
-              </div>              
+              </div>
               {!input.exposed ? (
-                <button 
+                <button
                   className="input-add-btn"
                   onClick={() => onAddParameter(input.name, input.value)}
                 >

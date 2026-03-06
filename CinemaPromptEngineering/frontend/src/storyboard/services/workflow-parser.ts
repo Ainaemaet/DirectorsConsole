@@ -1259,9 +1259,9 @@ export class WorkflowParser {
     for (const [nodeId, node] of Object.entries(workflow)) {
       if (nodeId === 'meta' || nodeId === 'version') continue;
       const typedNode = node as ComfyUINode;
-      if (typedNode.mode === 4) {
+      if (typedNode.mode === 4 || typedNode.mode === 2) {
         bypassedNodeIds.add(nodeId);
-        console.log(`[buildWorkflow] Node ${nodeId} (${typedNode.class_type}) is BYPASSED (mode=4)`);
+        console.log(`[buildWorkflow] Node ${nodeId} (${typedNode.class_type}) is ${typedNode.mode === 2 ? 'MUTED (mode=2)' : 'BYPASSED (mode=4)'}`);
       }
     }
     console.log(`[buildWorkflow] Total bypassed nodes: ${bypassedNodeIds.size}`, Array.from(bypassedNodeIds));
@@ -1290,9 +1290,9 @@ export class WorkflowParser {
           continue;
         }
         
-        // Skip bypassed nodes (mode=4 means bypassed in ComfyUI)
-        if (typedNode.mode === 4) {
-          console.log(`[buildWorkflow] Skipping bypassed node ${nodeId} (${typedNode.class_type})`);
+        // Skip bypassed (mode=4) and muted (mode=2) nodes
+        if (typedNode.mode === 4 || typedNode.mode === 2) {
+          console.log(`[buildWorkflow] Skipping ${typedNode.mode === 2 ? 'muted' : 'bypassed'} node ${nodeId} (${typedNode.class_type})`);
           continue;
         }
         

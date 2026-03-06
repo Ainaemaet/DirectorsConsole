@@ -563,6 +563,70 @@
   color: var(--sb-status-success);
 }
 
+/* Node mode: bypassed */
+.node-card.bypassed {
+  border-color: var(--sb-accent-warning, #f59e0b);
+  opacity: 0.85;
+}
+.node-card.bypassed .node-title {
+  color: var(--sb-accent-warning, #f59e0b);
+}
+
+/* Node mode: muted */
+.node-card.muted {
+  opacity: 0.45;
+}
+.node-card.muted .node-title {
+  color: var(--sb-text-muted);
+  text-decoration: line-through;
+}
+
+/* Mode toggle buttons in node header */
+.node-mode-controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-left: 4px;
+}
+
+.node-mode-btn {
+  padding: 2px 5px;
+  font-size: 11px;
+  background: var(--sb-bg-dark);
+  border: 1px solid var(--sb-border-medium);
+  border-radius: 3px;
+  color: var(--sb-text-muted);
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.node-mode-btn:hover {
+  border-color: var(--sb-text-secondary);
+  color: var(--sb-text-primary);
+}
+.node-mode-btn.active {
+  background: var(--sb-accent-primary);
+  border-color: var(--sb-accent-primary);
+  color: #fff;
+}
+.node-mode-btn.bypass {
+  background: var(--sb-accent-warning, #f59e0b);
+  border-color: var(--sb-accent-warning, #f59e0b);
+  color: #000;
+}
+.node-mode-btn.mute {
+  background: var(--sb-text-muted);
+  border-color: var(--sb-text-muted);
+  color: #fff;
+}
+
+.node-no-inputs {
+  padding: 6px 0;
+  font-size: 11px;
+  color: var(--sb-text-muted);
+  font-style: italic;
+}
+
 /* Status Bar */
 .editor-status {
   padding: 5px 16px;
