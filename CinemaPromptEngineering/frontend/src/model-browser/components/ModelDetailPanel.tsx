@@ -2,8 +2,9 @@
  * ModelDetailPanel — Right slide-in panel showing full metadata for a selected model.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ModelEntry, ModelDetail, fetchModelDetail, previewImageUrl, formatBytes } from '../services/model-browser-service';
+import { MODEL_NODE_MAP } from '../../studio/services/studio-bridge';
 
 interface ModelDetailPanelProps {
   model: ModelEntry;
@@ -16,6 +17,22 @@ export function ModelDetailPanel({ model, orchestratorUrl, onClose }: ModelDetai
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [copiedWord, setCopiedWord] = useState<string | null>(null);
+
+  const handleSendToStudio = useCallback(() => {
+    const mapping = MODEL_NODE_MAP[model.category];
+    if (!mapping) return;
+    window.dispatchEvent(
+      new CustomEvent('studio:add-model', {
+        detail: {
+          category: model.category,
+          filename: model.filename,
+          nodeType: mapping.nodeType,
+          inputName: mapping.inputName,
+        },
+      })
+    );
+    window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'studio' }));
+  }, [model.category, model.filename]);
 
   useEffect(() => {
     setDetail(null);
@@ -167,6 +184,19 @@ export function ModelDetailPanel({ model, orchestratorUrl, onClose }: ModelDetai
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Studio actions */}
+      {MODEL_NODE_MAP[model.category] && (
+        <div className="mb-detail__section mb-detail__studio-actions">
+          <button
+            className="mb-detail__chip"
+            onClick={handleSendToStudio}
+            title="Add a loader node for this model in the Studio tab"
+          >
+            Send to Studio ↗
+          </button>
         </div>
       )}
     </div>

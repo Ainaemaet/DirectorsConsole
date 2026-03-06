@@ -4,6 +4,7 @@ import { StoryboardUI } from './StoryboardUI';
 import { GalleryUI } from './gallery';
 import { ModelBrowserUI } from './model-browser';
 import { PromptEditorUI } from './prompt-editor';
+import { StudioUI } from './studio';
 import OAuthCallback from '@/components/OAuthCallback';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './App.css';
@@ -13,7 +14,7 @@ const isOAuthCallback = window.location.pathname.includes('/oauth/callback') ||
                          window.location.search.includes('code=') ||
                          window.location.search.includes('error=');
 
-type TabId = 'cinema' | 'storyboard' | 'gallery' | 'models' | 'prompts';
+type TabId = 'cinema' | 'storyboard' | 'gallery' | 'models' | 'prompts' | 'studio';
 
 interface Tab {
   id: TabId;
@@ -27,6 +28,7 @@ const TABS: Tab[] = [
   { id: 'gallery', label: 'Gallery', icon: '🖼️' },
   { id: 'models', label: 'Models', icon: '🧠' },
   { id: 'prompts', label: 'Prompt Editor', icon: '✏️' },
+  { id: 'studio', label: 'Studio', icon: '🎛️' },
 ];
 
 function DirectorsConsole() {
@@ -74,8 +76,8 @@ function DirectorsConsole() {
   }, []);
 
   useEffect(() => {
-    // Poll for project setting changes while Gallery or Models tab is active
-    if (activeTab !== 'gallery' && activeTab !== 'models') return;
+    // Poll for project setting changes while Gallery, Models, or Studio tab is active
+    if (activeTab !== 'gallery' && activeTab !== 'models' && activeTab !== 'studio') return;
 
     const loadProjectSettings = () => {
       try {
@@ -141,6 +143,15 @@ function DirectorsConsole() {
         <div style={{ display: activeTab === 'prompts' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <ErrorBoundary>
             <PromptEditorUI isActive={activeTab === 'prompts'} />
+          </ErrorBoundary>
+        </div>
+        <div style={{ display: activeTab === 'studio' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <ErrorBoundary>
+            <StudioUI
+              orchestratorUrl={galleryOrchestratorUrl}
+              comfyUiPath={modelBrowserComfyUiPath}
+              isActive={activeTab === 'studio'}
+            />
           </ErrorBoundary>
         </div>
       </main>

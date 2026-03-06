@@ -9,6 +9,7 @@ import { useEffect, useMemo, useCallback } from 'react';
 import { useModelBrowserStore } from './store/model-browser-store';
 import { ModelCard } from './components/ModelCard';
 import { ModelDetailPanel } from './components/ModelDetailPanel';
+import { MODEL_NODE_MAP } from '../studio/services/studio-bridge';
 import './ModelBrowserUI.css';
 
 interface ModelBrowserUIProps {
@@ -104,6 +105,23 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
 
   const toggleSortDir = () => setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
 
+  const handleOpenInStudio = useCallback(() => {
+    if (!selectedModel) return;
+    const mapping = MODEL_NODE_MAP[selectedModel.category];
+    if (!mapping) return;
+    window.dispatchEvent(
+      new CustomEvent('studio:add-model', {
+        detail: {
+          category: selectedModel.category,
+          filename: selectedModel.filename,
+          nodeType: mapping.nodeType,
+          inputName: mapping.inputName,
+        },
+      })
+    );
+    window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'studio' }));
+  }, [selectedModel]);
+
   // ── Empty state: ComfyUI path not set ──────────────────────────────────
   if (!comfyUiPath) {
     return (
@@ -162,6 +180,17 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
         >
           ↻
         </button>
+
+        {selectedModel && MODEL_NODE_MAP[selectedModel.category] && (
+          <button
+            className="mb-toolbar__refresh"
+            onClick={handleOpenInStudio}
+            title={`Send "${selectedModel.name}" to Studio tab`}
+            style={{ padding: '0 10px', fontSize: '12px' }}
+          >
+            Open in Studio ↗
+          </button>
+        )}
 
         {selectedCategory && !isLoadingModels && (
           <span className="mb-toolbar__count">
