@@ -1,0 +1,304 @@
+Director's Console — User Guide
+
+  Practical end-to-end workflows. Based on what's actually implemented as of March
+  2026.
+
+  ---
+  Setup
+
+  Start All Services
+
+  python start.py          # starts Orchestrator (9820), CPE backend (9800),
+  frontend (5173)
+  python start.py --setup  # first-run: verifies venvs and dependencies
+
+  Open http://localhost:5173 in a browser. You'll see four top-level tabs:
+  Storyboard, Gallery, Cinema Prompt Engineering, and Settings.
+
+  First-Run Configuration
+
+  Before generating anything, go to Main Menu (☰) → Settings:
+
+  1. Project path — set this to the folder where all output images will be saved.
+  This is the root from which the Orchestrator serves images and where the Gallery
+  reads files. Every panel gets its own subfolder here
+  ({projectPath}/{panelName}/).
+  2. ComfyUI URL — the address of your default ComfyUI node (e.g.,
+  http://192.168.1.100:8188). This is where single-node generations go.
+  3. Orchestrator URL — http://localhost:9820 if running locally. Required for
+  multi-node parallel generation and backend management.
+
+  If you're on a NAS/CIFS mount, go to Main Menu → Path Mappings and configure your
+   Windows ↔ Linux ↔ macOS path prefixes. The Orchestrator will automatically
+  translate paths in all API calls. Example: W:\VFX\ ↔ /mnt/Mandalore/VFX/.
+
+  ---
+  1. CPE Prompt Generation → Storyboard → Generation
+
+  Step 1: Generate a Cinematic Prompt (CPE Tab)
+
+  The Cinema Prompt Engineering tab builds prompts grounded in real-world
+  cinematography — it knows which cameras existed in which eras, which lenses they
+  used, and which film stocks are physically possible.
+
+  1. Select a Film Preset (e.g., "Blade Runner", "Neon Noir", "Golden Age
+  Hollywood"). Each preset locks in era-appropriate camera bodies, lenses, and film
+   stocks.
+  2. Configure shot composition: choose shot size (ECU → LS), camera angle,
+  movement, and lighting setup. Only historically valid combinations are offered.
+  3. Enter your scene description in the text field.
+  4. Click Generate Prompt to produce the rules-based prompt.
+  5. Optionally click Enhance with AI — this sends the generated prompt to your
+  configured LLM provider (set up in Settings → LLM Providers) to refine it. The
+  enhanced result appears below the original.
+
+  Step 2: Send the Prompt to Storyboard
+
+  This is a two-step process — both clicks are required:
+
+  1. Click 📋 Send to Storyboard (next to either the generated or enhanced prompt).
+   This stores the prompt in a shared buffer. No visible confirmation appears —
+  this is by design.
+  2. Switch to the Storyboard tab. In the right-side parameter panel, find the
+  positive prompt field for the active panel. A 🎬 button will appear in that
+  field's toolbar. Click it to paste the prompt.
+
+  After pasting, the buffer is cleared. The 🎬 button only appears on the positive
+  prompt field (not the negative one) and only when a prompt is waiting.
+
+  Step 3: Generate in the Storyboard
+
+  With a prompt in the panel's positive prompt field:
+
+  1. Ensure the panel has a workflow selected (see Workflow Setup below).
+  2. Adjust any parameters in the right panel — steps, CFG, seed, image inputs,
+  LoRAs, etc. These are per-panel; each panel stores its own values independently.
+  3. Click Generate. Progress appears in the Generation Progress sidebar (right
+  side), showing the current ComfyUI node being executed, phase (for multi-KSampler
+   workflows), and step count.
+  4. The result appears in the panel when done and is auto-saved to
+  {projectPath}/{panelName}/.
+
+  The Cancel button (red, next to Generate) sends an interrupt to all currently
+  busy nodes immediately.
+
+  ---
+  2. Workflow Setup and Parameter Exposure
+
+  Importing a Workflow
+
+  Workflows are ComfyUI workflow JSON files that you export from ComfyUI and import
+   into Director's Console.
+
+  1. In the Storyboard, click Main Menu → Import Workflow (or use the workflow
+  dropdown → import icon).
+  2. Select a ComfyUI workflow JSON. The frontend parses the nodes and extracts all
+   configurable parameters.
+  3. Give the workflow a name and assign it to a category tab: Text to Image, Image
+   to Image, Inpainting, Image Editing, Upscaling, or Video Generation.
+
+  The workflow dropdown at the top of the Storyboard is filtered by whichever
+  category tab is active. If you import a workflow and can't find it, check that
+  you're on the matching tab.
+
+  How Parameters Are Exposed
+
+  Director's Console reads the workflow JSON and auto-detects exposable parameters:
+
+  - KSampler inputs: steps, CFG, sampler, scheduler, seed
+  - Text nodes (CLIPTextEncode): exposed as prompt widgets with the CPE paste
+  button and camera angle selector
+  - Image inputs (LoadImage, etc.): exposed as drag-drop zones with crop/mask tools
+  - LoRA loaders: exposed as dropdowns with strength sliders
+  - Model nodes (CheckpointLoader, UNETLoader): exposed as model selectors
+  - Custom nodes: any node with recognizable parameter types gets exposed
+
+  Parameters you don't want exposed can be left as fixed values inside ComfyUI
+  before exporting.
+
+  Per-Panel Parameter Isolation
+
+  Each canvas panel stores its own parameter values independently. The active
+  (selected) panel uses the live values shown in the right-side parameter panel.
+  All other panels use their own stored copies. When you switch which panel is
+  selected, the right-side panel reloads that panel's stored values.
+
+  When switching workflows on a panel, only the positive prompt and image inputs
+  are preserved — everything else (steps, CFG, sampler) resets to the new
+  workflow's defaults.
+
+  ---
+  3. Multi-Node Parallel Generation
+
+  Multi-node parallel generation runs the same workflow simultaneously across
+  multiple ComfyUI backends, each with a different random seed, giving you N
+  results at once.
+
+  Prerequisites
+
+  1. The Orchestrator must be running (http://localhost:9820).
+  2. The Orchestrator URL must be configured in Storyboard Settings.
+  3. Multiple ComfyUI nodes must be registered in the Orchestrator (configured in
+  the Orchestrator's own config or auto-discovered).
+
+  Setting Up Nodes
+
+  Open Main Menu → Node Manager. This shows all render nodes the Orchestrator knows
+   about — their status (online/offline/busy), GPU name, VRAM total/used, GPU
+  utilization %, temperature, CPU %, and RAM. Nodes are populated from the
+  Orchestrator's /api/backends endpoint on connect.
+
+  Node stats update in real-time via WebSocket (KayTool metrics if the KayTool
+  ComfyUI extension is installed on the node; otherwise from /system_stats).
+
+  Running Parallel Generation
+
+  1. In the Storyboard, open the node selector (multi-node icon, toolbar above the
+  canvas). Select two or more online nodes using the checkboxes.
+  2. Configure the panel's workflow and parameters normally.
+  3. Click Generate. The frontend submits the workflow to the Orchestrator as a job
+   group (POST /api/job-group with the workflow JSON and list of backend IDs). The
+  Orchestrator assigns a unique random seed to each backend.
+  4. A ParallelResultsView overlay appears, showing a card for each backend. Each
+  card updates in real-time as the job progresses (0–100%).
+  5. As each node completes, its result image is saved to the panel's image history
+   immediately — you don't wait for all nodes to finish.
+  6. The panel's Generation Progress sidebar shows individual progress bars per
+  node.
+  7. When all jobs complete (or the first failure occurs), a summary is logged.
+  Close the overlay with its X button.
+
+  Important: The Orchestrator handles path remapping for cross-platform NAS setups.
+   Per-node OS-specific path normalization (Windows backslashes vs forward slashes)
+   is not applied in parallel mode — all nodes must share the same path format, or
+  use the Path Mappings configuration.
+
+  Cancelling Parallel Jobs
+
+  Click the Cancel button. This sends an interrupt to all currently busy nodes
+  directly via their ComfyUI /interrupt endpoint.
+
+  ---
+  4. The Gallery
+
+  The Gallery tab is a full media browser for everything inside your project path.
+
+  Navigation
+
+  The left panel shows a folder tree of your project. Click any folder to load its
+  contents. The Gallery never modifies files it hasn't been explicitly told to —
+  browsing is read-only.
+
+  Views
+
+  - Grid: thumbnails with hover preview
+  - List: filename, size, date columns
+  - Masonry: Pinterest-style variable-height layout with tight 4px gaps, no chrome
+  - Timeline: chronological grouping by date
+
+  Metadata and Organization
+
+  - Ratings: click the star on any image to rate 1–5. Ratings are stored in
+  {projectPath}/.gallery/gallery.json, not in the file itself.
+  - Tags: create color-coded tags (Main Menu → Tag Manager) and apply them to files
+   via right-click.
+  - PNG metadata search: search across all PNG files by their embedded metadata —
+  workflow name, parameters, seeds, model names.
+  - Duplicate finder: compares files by hash across the project.
+
+  Batch Operations
+
+  Select multiple files with Ctrl+Click or Shift+Click, then use the batch bar:
+  - Batch rename: template-based ({panel}_{date}_{index}), regex, or sequential
+  auto-numbering.
+  - Move: move selected files to another folder.
+  - Trash: soft-delete to .gallery/.trash/. Restore via Trash panel.
+
+  When you rename files in the Gallery, the Storyboard is notified automatically
+  and updates its panel image history URLs so existing panels don't show broken
+  images.
+
+  Gallery → Storyboard Integration
+
+  Right-click any image in the Gallery for context menu options:
+
+  - Send to Storyboard: sends the image as a reference input to a parameter in the
+  active Storyboard panel. A submenu lists the available image input parameters for
+   the currently loaded workflow.
+  - Restore workflow from metadata: if the PNG has embedded generation metadata,
+  this restores the full workflow and parameters in the Storyboard so you can
+  re-run or modify the exact generation.
+
+  These work via browser window CustomEvents — both tabs must be open in the same
+  browser window for them to communicate.
+
+  ---
+  5. Gotchas and Non-Obvious Steps
+
+  The workflow tab filter is strict. If you switch to the "Video Generation" tab
+  and your workflows have no video category assigned, the dropdown shows empty.
+  This doesn't mean your workflows are gone — switch back to the correct tab or
+  reassign the category in the workflow editor.
+
+  Loading a project doesn't auto-switch the workflow tab. If your project was saved
+   with a video workflow while you were on the video tab, but you later switch to
+  the text2img tab and then load the project, the workflow dropdown will appear
+  blank (the workflow ID is restored internally, but getFilteredWorkflows() only
+  shows workflows matching the current tab). Work around this by manually switching
+   to the matching tab after loading a project.
+
+  The CPE "Send to Storyboard" button requires a second click in the Storyboard.
+  After clicking it in the CPE tab, switch to Storyboard and look for the 🎬 button
+   in the positive prompt field. The buffer persists until you click it or refresh
+  the page.
+
+  Panels are independent; the selected panel is special. Only the selected panel
+  uses the live parameter values shown on the right. If you generate on an
+  unselected panel, it uses that panel's stored parameters, which may be different
+  from what you see. Click a panel to select it before changing parameters intended
+   for it.
+
+  Image deletion requires the CPE backend proxy. The browser can't DELETE files
+  directly from ComfyUI due to CORS. The delete button routes through
+  http://localhost:9800/api/delete-file. If the CPE backend isn't running, image
+  deletion will silently fail.
+
+  Parallel generation requires the Orchestrator running. If you select multiple
+  nodes and click Generate but don't have the Orchestrator URL configured, you'll
+  get an error message and generation won't start. Single-node generation goes
+  direct to ComfyUI and doesn't need the Orchestrator.
+
+  Downstream node cascading on disabled inputs. If you disable an image input
+  (e.g., uncheck a ControlNet image), all nodes downstream of it in the workflow
+  graph are automatically bypassed. This prevents ComfyUI errors from missing
+  inputs. The cascade is computed from the workflow JSON graph at generation time.
+
+  ---
+  Recent Changes (March 2026)
+
+  C1 — Orchestrator job submission fixed. Single-job submissions via the
+  Orchestrator (POST /api/job) now correctly send the workflow as workflow_json
+  (not workflow) and place source/client_id inside a metadata object, matching the
+  Orchestrator's JobSubmissionRequest model. Before this fix, single-job
+  orchestrated submissions always failed silently.
+
+  C2 — Parallel generation now routes through Orchestrator job groups. Previously,
+  parallel generation bypassed the Orchestrator entirely — the frontend submitted a
+   separate /prompt request directly to each ComfyUI node and tracked each one with
+   its own WebSocket. This was replaced: the frontend now submits a single POST
+  /api/job-group to the Orchestrator, which handles distribution and seed
+  assignment. Real-time progress comes via a single WebSocket at
+  /ws/job-groups/{id}. The new ParallelResultsView overlay shows streaming results
+  as each node completes. Results are saved to panel history as they arrive (not
+  batch at the end).
+
+  M3 — Node restart now routes through the Orchestrator. The "Restart" button in
+  Node Manager previously tried to call ComfyUI's /interrupt and /free endpoints
+  directly, which required the frontend to know ComfyUI node credentials and
+  bypassed the Orchestrator's job awareness. It now calls POST
+  /api/backends/{id}/restart on the Orchestrator, which handles the restart safely
+  (with optional job interrupt and memory free options).
+
+  M1 — Debug signal removed. A block of code in the project manager that triggered
+  an alert on every project save when a debug string appeared in server responses
+  has been removed.
