@@ -153,7 +153,7 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
   }, [selectedModel]);
 
   const activeDownloads = downloadTasks.filter(
-    (t) => t.status === 'queued' || t.status === 'downloading'
+    (t) => t.status === 'queued' || t.status === 'downloading' || t.status === 'paused'
   ).length;
 
   const cycleNsfwMode = () => {
@@ -390,7 +390,9 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
             <ModelDetailPanel
               model={selectedModel}
               orchestratorUrl={orchestratorUrl}
+              comfyUiPath={comfyUiPath}
               onClose={() => setSelectedModel(null)}
+              onRefresh={handleRefresh}
             />
           )}
         </div>

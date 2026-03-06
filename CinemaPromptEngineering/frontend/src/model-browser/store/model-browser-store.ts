@@ -11,6 +11,9 @@ import {
   listDownloadTasks,
   cancelDownload,
   removeDownload,
+  pauseDownload,
+  resumeDownload,
+  setDownloadPriority,
 } from '../services/model-browser-service';
 
 export type NsfwMode = 'hidden' | 'blurred' | 'visible' | 'only-nsfw';
@@ -92,6 +95,10 @@ interface ModelBrowserStore {
   syncDownloadTasks: (orchestratorUrl: string) => Promise<void>;
   cancelTask: (orchestratorUrl: string, taskId: string) => Promise<void>;
   removeTask: (orchestratorUrl: string, taskId: string) => Promise<void>;
+  pauseTask: (orchestratorUrl: string, taskId: string) => Promise<void>;
+  resumeTask: (orchestratorUrl: string, taskId: string) => Promise<void>;
+  bumpPriority: (orchestratorUrl: string, taskId: string) => Promise<void>;
+  lowerPriority: (orchestratorUrl: string, taskId: string) => Promise<void>;
 }
 
 export const useModelBrowserStore = create<ModelBrowserStore>((set, get) => ({
@@ -191,5 +198,31 @@ export const useModelBrowserStore = create<ModelBrowserStore>((set, get) => ({
   removeTask: async (orchestratorUrl, taskId) => {
     await removeDownload(orchestratorUrl, taskId);
     set((s) => ({ downloadTasks: s.downloadTasks.filter((t) => t.task_id !== taskId) }));
+  },
+
+  pauseTask: async (orchestratorUrl, taskId) => {
+    await pauseDownload(orchestratorUrl, taskId);
+    get().updateDownloadTask(taskId, { status: 'paused' });
+  },
+
+  resumeTask: async (orchestratorUrl, taskId) => {
+    await resumeDownload(orchestratorUrl, taskId);
+    get().updateDownloadTask(taskId, { status: 'queued' });
+  },
+
+  bumpPriority: async (orchestratorUrl, taskId) => {
+    const task = get().downloadTasks.find((t) => t.task_id === taskId);
+    if (!task) return;
+    const newPrio = Math.max(1, (task.priority ?? 5) - 1);
+    await setDownloadPriority(orchestratorUrl, taskId, newPrio);
+    get().updateDownloadTask(taskId, { priority: newPrio });
+  },
+
+  lowerPriority: async (orchestratorUrl, taskId) => {
+    const task = get().downloadTasks.find((t) => t.task_id === taskId);
+    if (!task) return;
+    const newPrio = Math.min(9, (task.priority ?? 5) + 1);
+    await setDownloadPriority(orchestratorUrl, taskId, newPrio);
+    get().updateDownloadTask(taskId, { priority: newPrio });
   },
 }));

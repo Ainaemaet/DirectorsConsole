@@ -116,7 +116,8 @@ export interface DownloadTask {
   filename: string;
   target_path: string;
   source: string;
-  status: 'queued' | 'downloading' | 'done' | 'failed' | 'cancelled';
+  status: 'queued' | 'downloading' | 'paused' | 'done' | 'failed' | 'cancelled';
+  priority?: number;
   downloaded_bytes: number;
   total_bytes: number;
   bps: number;
@@ -170,6 +171,83 @@ export async function cancelDownload(orchestratorUrl: string, taskId: string): P
 
 export async function removeDownload(orchestratorUrl: string, taskId: string): Promise<void> {
   await fetch(`${orchestratorUrl}/api/downloads/${taskId}/remove`, { method: 'DELETE' });
+}
+
+export async function pauseDownload(orchestratorUrl: string, taskId: string): Promise<void> {
+  const resp = await fetch(`${orchestratorUrl}/api/downloads/${taskId}/pause`, { method: 'POST' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function resumeDownload(orchestratorUrl: string, taskId: string): Promise<void> {
+  const resp = await fetch(`${orchestratorUrl}/api/downloads/${taskId}/resume`, { method: 'POST' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setDownloadPriority(orchestratorUrl: string, taskId: string, priority: number): Promise<void> {
+  const resp = await fetch(`${orchestratorUrl}/api/downloads/${taskId}/priority`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priority }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function setMaxConcurrent(orchestratorUrl: string, maxConcurrent: number): Promise<void> {
+  await fetch(`${orchestratorUrl}/api/downloads/settings/max-concurrent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ max_concurrent: maxConcurrent }),
+  });
+}
+
+// ── Model management ──────────────────────────────────────────────────────────
+
+export interface MoveRequest {
+  model_path: string;
+  new_category: string;
+  new_path_index: number;
+  new_subfolder: string;
+  copy: boolean;
+  comfy_ui_path: string;
+}
+
+export async function moveModel(orchestratorUrl: string, req: MoveRequest): Promise<{ moved: boolean; new_path?: string; message?: string }> {
+  const resp = await fetch(`${orchestratorUrl}/api/model-browser/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+  return resp.json();
+}
+
+export async function updateMetadata(
+  orchestratorUrl: string,
+  modelPath: string,
+  fields: Record<string, unknown>,
+  previewUrl?: string
+): Promise<Record<string, unknown>> {
+  const resp = await fetch(`${orchestratorUrl}/api/model-browser/metadata`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_path: modelPath, fields, preview_url: previewUrl ?? '' }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+  return resp.json();
+}
+
+export async function fetchCivitaiMetadata(
+  orchestratorUrl: string,
+  modelPath: string,
+  overwrite = false
+): Promise<{ found: boolean; sha256?: string; metadata?: Record<string, unknown>; preview_path?: string }> {
+  const resp = await fetch(`${orchestratorUrl}/api/model-browser/fetch-civitai-metadata`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model_path: modelPath, overwrite }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+  return resp.json();
 }
 
 // ── Discover — keys ───────────────────────────────────────────────────────────

@@ -8,15 +8,18 @@ serve a self-contained model browser — no dependency on ComfyUI-Model-Manager.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import os
 import re
+import shutil
 import struct
 import time
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -681,3 +684,278 @@ async def search_models(
             break
 
     return SearchResponse(success=True, models=results)
+
+
+# ---------------------------------------------------------------------------
+# Model management — move / copy
+# ---------------------------------------------------------------------------
+
+
+class MoveRequest(BaseModel):
+    model_path: str       # absolute path to current model file
+    new_category: str
+    new_path_index: int = 0
+    new_subfolder: str = ""
+    copy: bool = False    # True = copy (keep original), False = move
+    comfy_ui_path: str    # needed to resolve category paths
+
+
+@router.post("/move")
+async def move_model(req: MoveRequest) -> dict:
+    """Move or copy a model file together with its sidecar files."""
+    for p in (req.model_path, req.comfy_ui_path):
+        ok, err = _is_path_safe(p)
+        if not ok:
+            raise HTTPException(status_code=400, detail=err)
+
+    def _do_move() -> dict:
+        src = Path(req.model_path)
+        if not src.exists():
+            raise FileNotFoundError(f"Model not found: {src}")
+
+        # Resolve target directory
+        yaml_path = Path(req.comfy_ui_path) / "extra_model_paths.yaml"
+        if not yaml_path.exists():
+            raise FileNotFoundError("extra_model_paths.yaml not found")
+        cats = _parse_extra_model_paths(yaml_path)
+        paths = cats.get(req.new_category, [])
+        if not paths:
+            raise ValueError(f"Category '{req.new_category}' has no configured paths")
+        base = Path(paths[min(req.new_path_index, len(paths) - 1)])
+        sub = req.new_subfolder.strip("/\\")
+        dest_dir = base / sub if sub else base
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / src.name
+
+        if dest == src and not req.copy:
+            return {"moved": False, "message": "Source and destination are the same"}
+
+        op = shutil.copy2 if req.copy else shutil.move
+        op(str(src), str(dest))
+
+        # Move/copy sidecars: .metadata.json, .civitai.info, .md, preview files
+        stem = src.stem
+        for sib in src.parent.iterdir():
+            if sib == src:
+                continue
+            # Match by stem prefix (covers all sidecar naming conventions)
+            if sib.stem.startswith(stem) and sib.suffix.lower() not in {
+                ".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf"
+            }:
+                sib_dest = dest_dir / sib.name
+                try:
+                    if req.copy:
+                        shutil.copy2(str(sib), str(sib_dest))
+                    else:
+                        shutil.move(str(sib), str(sib_dest))
+                except Exception as exc:
+                    pass  # Non-fatal — log but continue
+
+        # Invalidate scan cache
+        _SCAN_CACHE.clear()
+        return {"moved": True, "new_path": str(dest)}
+
+    try:
+        result = await asyncio.to_thread(_do_move)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Model management — metadata editor
+# ---------------------------------------------------------------------------
+
+
+class MetadataUpdateRequest(BaseModel):
+    model_path: str
+    fields: dict[str, Any]   # fields to merge into .metadata.json
+    preview_url: str = ""    # if set, download and save as preview image
+
+
+@router.put("/metadata")
+async def update_metadata(req: MetadataUpdateRequest) -> dict:
+    """Merge fields into a model's .metadata.json sidecar."""
+    ok, err = _is_path_safe(req.model_path)
+    if not ok:
+        raise HTTPException(status_code=400, detail=err)
+
+    def _write() -> dict:
+        path = Path(req.model_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Model not found: {path}")
+        existing, _ = _read_metadata_json(path)
+        merged = {**existing, **req.fields}
+        meta_path = path.parent / f"{path.stem}.metadata.json"
+        meta_path.write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        _SCAN_CACHE.clear()
+        return {"ok": True, "metadata_path": str(meta_path)}
+
+    try:
+        result = await asyncio.to_thread(_write)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Optionally download preview
+    if req.preview_url and result.get("ok"):
+        try:
+            path = Path(req.model_path)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                resp = await client.get(req.preview_url)
+                resp.raise_for_status()
+                ct = resp.headers.get("content-type", "")
+                ext = (
+                    ".mp4" if "mp4" in ct else
+                    ".webm" if "webm" in ct else
+                    ".webp" if "webp" in ct else
+                    ".png" if "png" in ct else
+                    ".gif" if "gif" in ct else
+                    ".jpg"
+                )
+                preview_path = path.parent / f"{path.stem}{ext}"
+                preview_path.write_bytes(resp.content)
+                result["preview_path"] = str(preview_path)
+        except Exception as exc:
+            result["preview_warning"] = f"Preview download failed: {exc}"
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Model management — fetch missing metadata from Civitai by hash
+# ---------------------------------------------------------------------------
+
+
+class FetchCivitaiMetaRequest(BaseModel):
+    model_path: str
+    overwrite: bool = False   # True = replace all fields, False = merge (missing only)
+
+
+@router.post("/fetch-civitai-metadata")
+async def fetch_civitai_metadata(req: FetchCivitaiMetaRequest) -> dict:
+    """Look up Civitai metadata by SHA-256 hash and write/merge into .metadata.json."""
+    from orchestrator.api import key_store as _ks
+
+    ok, err = _is_path_safe(req.model_path)
+    if not ok:
+        raise HTTPException(status_code=400, detail=err)
+
+    path = Path(req.model_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Model not found: {path}")
+
+    # Get or compute sha256
+    def _get_sha256() -> str:
+        existing, _ = _read_metadata_json(path)
+        saved = existing.get("sha256", "")
+        if saved and len(saved) == 64:
+            return saved
+        # Compute from file
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    sha256 = await asyncio.to_thread(_get_sha256)
+
+    # Query Civitai
+    headers: dict[str, str] = {}
+    key = _ks.get_key("civitai")
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+        try:
+            resp = await client.get(
+                f"https://civitai.com/api/v1/model-versions/by-hash/{sha256}"
+            )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=503, detail=f"Civitai unreachable: {exc}")
+
+    if resp.status_code == 404:
+        return {"found": False, "sha256": sha256}
+    if not resp.is_success:
+        raise HTTPException(status_code=resp.status_code, detail="Civitai error")
+
+    data = resp.json()
+
+    # Build metadata dict
+    model_block = data.get("model", {})
+    new_meta: dict[str, Any] = {
+        "sha256": sha256,
+        "model_name": model_block.get("name", path.stem),
+        "base_model": data.get("baseModel", ""),
+        "trained_words": data.get("trainedWords", []),
+        "description": _strip_html(model_block.get("description", "") or ""),
+        "tags": [t.get("name", t) if isinstance(t, dict) else t for t in model_block.get("tags", [])],
+        "civitai": {
+            "modelId": model_block.get("id"),
+            "modelVersionId": data.get("id"),
+            "baseModel": data.get("baseModel", ""),
+            "trainedWords": data.get("trainedWords", []),
+            "model": {
+                "name": model_block.get("name", ""),
+                "tags": [t.get("name", t) if isinstance(t, dict) else t for t in model_block.get("tags", [])],
+                "description": _strip_html(model_block.get("description", "") or ""),
+            },
+        },
+    }
+
+    # Merge or overwrite
+    def _save(new_meta: dict, overwrite: bool) -> dict:
+        existing, _ = _read_metadata_json(path)
+        if overwrite:
+            merged = {**existing, **new_meta}
+        else:
+            # Only fill in fields that are missing or empty in existing
+            merged = dict(existing)
+            for k, v in new_meta.items():
+                if not merged.get(k):
+                    merged[k] = v
+        meta_path = path.parent / f"{path.stem}.metadata.json"
+        meta_path.write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        _SCAN_CACHE.clear()
+        return merged
+
+    merged = await asyncio.to_thread(_save, new_meta, req.overwrite)
+
+    # Download preview if missing
+    preview_path = ""
+    existing_preview = _find_preview(path)
+    if not existing_preview:
+        images = data.get("images", [])
+        if images:
+            preview_url = images[0].get("url", "")
+            if preview_url:
+                try:
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                        pr = await client.get(preview_url)
+                        pr.raise_for_status()
+                        ct = pr.headers.get("content-type", "")
+                        ext = ".jpg"
+                        for mime, e in [("mp4", ".mp4"), ("webm", ".webm"), ("webp", ".webp"), ("png", ".png")]:
+                            if mime in ct:
+                                ext = e
+                                break
+                        pp = path.parent / f"{path.stem}{ext}"
+                        pp.write_bytes(pr.content)
+                        preview_path = str(pp)
+                except Exception:
+                    pass
+
+    return {
+        "found": True,
+        "sha256": sha256,
+        "metadata": merged,
+        "preview_path": preview_path,
+    }

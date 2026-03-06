@@ -5,9 +5,9 @@
  * Completed / failed tasks are shown statically.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useModelBrowserStore } from '../store/model-browser-store';
-import { formatBytes } from '../services/model-browser-service';
+import { formatBytes, setMaxConcurrent } from '../services/model-browser-service';
 
 interface DownloadDrawerProps {
   orchestratorUrl: string;
@@ -26,6 +26,7 @@ function statusLabel(status: string): string {
   switch (status) {
     case 'queued': return 'Queued';
     case 'downloading': return 'Downloading';
+    case 'paused': return 'Paused';
     case 'done': return 'Done';
     case 'failed': return 'Failed';
     case 'cancelled': return 'Cancelled';
@@ -34,7 +35,8 @@ function statusLabel(status: string): string {
 }
 
 export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawerProps) {
-  const { downloadTasks, updateDownloadTask, cancelTask, removeTask } = useModelBrowserStore();
+  const { downloadTasks, updateDownloadTask, cancelTask, removeTask, pauseTask, resumeTask, bumpPriority, lowerPriority } = useModelBrowserStore();
+  const [maxConcurrent, setMaxConcurrentLocal] = useState(2);
 
   // Track active SSE connections per task_id
   const sseRefs = useRef<Map<string, EventSource>>(new Map());
@@ -44,7 +46,7 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
     if (!orchestratorUrl) return;
 
     downloadTasks.forEach((task) => {
-      if (task.status !== 'queued' && task.status !== 'downloading') {
+      if (task.status !== 'queued' && task.status !== 'downloading' && task.status !== 'paused') {
         // Close any stale SSE for completed tasks
         const existing = sseRefs.current.get(task.task_id);
         if (existing) {
@@ -63,7 +65,7 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
         try {
           const data = JSON.parse(e.data);
           updateDownloadTask(task.task_id, data);
-          if (data.status === 'done' || data.status === 'failed' || data.status === 'cancelled') {
+          if (data.status === 'done' || data.status === 'failed' || data.status === 'cancelled' || data.status === 'paused') {
             es.close();
             sseRefs.current.delete(task.task_id);
           }
@@ -97,7 +99,7 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
   }, []);
 
   const activeCount = downloadTasks.filter(
-    (t) => t.status === 'queued' || t.status === 'downloading'
+    (t) => t.status === 'queued' || t.status === 'downloading' || t.status === 'paused'
   ).length;
 
   if (!open) return null;
@@ -112,6 +114,20 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
           )}
         </span>
         <div className="mb-drawer__header-actions">
+          <label className="mb-drawer__concurrent-label" title="Max simultaneous downloads">
+            Parallel:&nbsp;
+            <select
+              className="mb-drawer__concurrent-select"
+              value={maxConcurrent}
+              onChange={async (e) => {
+                const n = Number(e.target.value);
+                setMaxConcurrentLocal(n);
+                await setMaxConcurrent(orchestratorUrl, n);
+              }}
+            >
+              {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
           {downloadTasks.some((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled') && (
             <button
               className="mb-drawer__clear"
@@ -139,6 +155,8 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
             : (task.progress ?? 0);
 
           const isActive = task.status === 'queued' || task.status === 'downloading';
+          const isPaused = task.status === 'paused';
+          const isFinished = task.status === 'done' || task.status === 'failed' || task.status === 'cancelled';
 
           return (
             <div
@@ -152,11 +170,11 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
                 → {task.target_path}
               </div>
 
-              {isActive && (
+              {(isActive || isPaused) && (
                 <div className="mb-drawer__progress-row">
                   <div className="mb-drawer__progress-bar">
                     <div
-                      className="mb-drawer__progress-fill"
+                      className={`mb-drawer__progress-fill ${isPaused ? 'mb-drawer__progress-fill--paused' : ''}`}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -184,15 +202,38 @@ export function DownloadDrawer({ orchestratorUrl, open, onClose }: DownloadDrawe
               </div>
 
               <div className="mb-drawer__item-actions">
-                {isActive && (
+                {task.status === 'queued' && (
+                  <>
+                    <button className="mb-drawer__btn" title="Increase priority" onClick={() => bumpPriority(orchestratorUrl, task.task_id)}>↑</button>
+                    <button className="mb-drawer__btn" title="Decrease priority" onClick={() => lowerPriority(orchestratorUrl, task.task_id)}>↓</button>
+                    <span className="mb-drawer__priority">P{task.priority ?? 5}</span>
+                  </>
+                )}
+                {task.status === 'downloading' && (
+                  <button
+                    className="mb-drawer__btn"
+                    onClick={() => pauseTask(orchestratorUrl, task.task_id)}
+                  >
+                    ⏸ Pause
+                  </button>
+                )}
+                {isPaused && (
+                  <button
+                    className="mb-drawer__btn mb-drawer__btn--resume"
+                    onClick={() => resumeTask(orchestratorUrl, task.task_id)}
+                  >
+                    ▶ Resume
+                  </button>
+                )}
+                {!isFinished && (
                   <button
                     className="mb-drawer__btn mb-drawer__btn--cancel"
                     onClick={() => cancelTask(orchestratorUrl, task.task_id)}
                   >
-                    Cancel
+                    ✕
                   </button>
                 )}
-                {!isActive && (
+                {isFinished && (
                   <button
                     className="mb-drawer__btn mb-drawer__btn--remove"
                     onClick={() => removeTask(orchestratorUrl, task.task_id)}
