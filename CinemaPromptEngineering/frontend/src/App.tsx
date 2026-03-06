@@ -53,6 +53,13 @@ function DirectorsConsole() {
   });
 
   useEffect(() => {
+    const handler = (e: Event) =>
+      setActiveTab((e as CustomEvent<string>).detail as TabId);
+    window.addEventListener('app:navigate-tab', handler);
+    return () => window.removeEventListener('app:navigate-tab', handler);
+  }, []);
+
+  useEffect(() => {
     // Only poll for project setting changes while Gallery tab is active
     if (activeTab !== 'gallery') return;
 

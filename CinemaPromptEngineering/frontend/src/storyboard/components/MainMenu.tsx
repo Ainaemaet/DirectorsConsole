@@ -249,6 +249,7 @@ export function MainMenu({
                 <button
                   className={`menu-item ${showRecents ? 'menu-item--active' : ''}`}
                   disabled={isLoading || recentProjects.length === 0}
+                  onClick={() => setShowRecents(prev => !prev)}
                 >
                   <Clock size={16} />
                   <span>Recent Projects</span>
