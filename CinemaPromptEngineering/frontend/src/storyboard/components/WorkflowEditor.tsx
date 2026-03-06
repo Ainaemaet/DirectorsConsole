@@ -21,12 +21,20 @@ import './WorkflowEditor.css';
 // Types
 // ============================================================================
 
+export interface BypassGroup {
+  id: string;
+  name: string;
+  nodeModes: Record<string, number>; // nodeId → mode (only non-zero stored)
+}
+
 interface WorkflowEditorProps {
   workflow: ComfyUIWorkflow | null;
   parsedWorkflow: ParsedWorkflow | null;
   initialConfig?: ParameterConfig[];
-  comfyUrl?: string; // URL to fetch node definitions
-  onSave: (config: ParameterConfig[], nodeModes: Record<string, number>) => void;
+  initialBypassGroups?: BypassGroup[];
+  bypassGroupApplyMode?: 'replace' | 'merge';
+  comfyUrl?: string;
+  onSave: (config: ParameterConfig[], nodeModes: Record<string, number>, bypassGroups: BypassGroup[]) => void;
   onCancel: () => void;
 }
 
@@ -167,17 +175,19 @@ function getDefaultConstraints(type: string, _value: any): any {
 // Workflow Editor Component
 // ============================================================================
 
-export function WorkflowEditor({ 
-  workflow, 
-  parsedWorkflow, 
+export function WorkflowEditor({
+  workflow,
+  parsedWorkflow,
   initialConfig,
+  initialBypassGroups,
+  bypassGroupApplyMode = 'replace',
   comfyUrl,
-  onSave, 
-  onCancel 
+  onSave,
+  onCancel,
 }: WorkflowEditorProps) {
   const [configs, setConfigs] = useState<ParameterConfig[]>([]);
   const [selectedConfig, setSelectedConfig] = useState<ParameterConfig | null>(null);
-  const [activeTab, setActiveTab] = useState<'exposed' | 'all' | 'nodes'>('exposed');
+  const [activeTab, setActiveTab] = useState<'exposed' | 'all' | 'nodes' | 'groups'>('exposed');
   const [searchTerm, setSearchTerm] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -194,6 +204,10 @@ export function WorkflowEditor({
     }
     return modes;
   });
+  const [localBypassGroups, setLocalBypassGroups] = useState<BypassGroup[]>(
+    initialBypassGroups ?? []
+  );
+  const [newGroupName, setNewGroupName] = useState('');
 
   // Fetch node definitions and available LoRAs when comfyUrl is available
   useEffect(() => {
@@ -507,10 +521,9 @@ export function WorkflowEditor({
   
   // Handle save
   const handleSave = useCallback(() => {
-    // Sort by order before saving
     const sortedConfigs = [...configs].sort((a, b) => a.order - b.order);
-    onSave(sortedConfigs, localNodeModes);
-  }, [configs, onSave, localNodeModes]);
+    onSave(sortedConfigs, localNodeModes, localBypassGroups);
+  }, [configs, onSave, localNodeModes, localBypassGroups]);
   
   // Get all nodes for the "all" tab
   const allNodes = extractAllNodes();
@@ -559,11 +572,17 @@ export function WorkflowEditor({
         >
           Exposed Parameters ({configs.filter(c => c.exposed).length})
         </button>
-        <button 
+        <button
           className={`editor-tab ${activeTab === 'all' ? 'active' : ''}`}
           onClick={() => setActiveTab('all')}
         >
           All Nodes
+        </button>
+        <button
+          className={`editor-tab ${activeTab === 'groups' ? 'active' : ''}`}
+          onClick={() => setActiveTab('groups')}
+        >
+          Groups{localBypassGroups.length > 0 ? ` (${localBypassGroups.length})` : ''}
         </button>
       </div>
       
@@ -607,6 +626,27 @@ export function WorkflowEditor({
         
         {activeTab === 'all' && (
           <div className="nodes-list">
+            {localBypassGroups.length > 0 && (
+              <div className="bypass-group-apply-bar">
+                <span className="bypass-group-apply-label">Apply group:</span>
+                <select
+                  className="bypass-group-select"
+                  value=""
+                  onChange={e => {
+                    const group = localBypassGroups.find(g => g.id === e.target.value);
+                    if (!group) return;
+                    const base = bypassGroupApplyMode === 'merge' ? { ...localNodeModes } : {};
+                    setLocalNodeModes({ ...base, ...group.nodeModes });
+                    setHasChanges(true);
+                  }}
+                >
+                  <option value="" disabled>Select a group...</option>
+                  {localBypassGroups.map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             {allNodes.map((node) => (
               <NodeCard
                 key={node.id}
@@ -619,6 +659,109 @@ export function WorkflowEditor({
                 }}
               />
             ))}
+          </div>
+        )}
+
+        {activeTab === 'groups' && (
+          <div className="groups-list">
+            {localBypassGroups.length === 0 && (
+              <p className="empty-message">
+                No groups yet. Set node states in the All Nodes tab, then save them as a group below.
+              </p>
+            )}
+            {localBypassGroups.map(group => {
+              const modeLabel = (m: number) => m === 4 ? 'bypass' : m === 2 ? 'mute' : 'active';
+              const nonDefaultEntries = Object.entries(group.nodeModes).filter(([, m]) => m !== 0);
+              return (
+                <div key={group.id} className="group-card">
+                  <div className="group-card-header">
+                    <span className="group-name">{group.name}</span>
+                    <div className="group-actions">
+                      <button
+                        className="group-apply-btn"
+                        onClick={() => {
+                          const base = bypassGroupApplyMode === 'merge' ? { ...localNodeModes } : {};
+                          setLocalNodeModes({ ...base, ...group.nodeModes });
+                          setHasChanges(true);
+                          setActiveTab('all');
+                        }}
+                        title="Apply this group to current node states"
+                      >
+                        Apply
+                      </button>
+                      <button
+                        className="group-delete-btn"
+                        onClick={() => {
+                          setLocalBypassGroups(prev => prev.filter(g => g.id !== group.id));
+                          setHasChanges(true);
+                        }}
+                        title="Delete this group"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                  {nonDefaultEntries.length > 0 ? (
+                    <ul className="group-node-list">
+                      {nonDefaultEntries.map(([nodeId, mode]) => {
+                        const nodeMeta = allNodes.find(n => n.id === nodeId);
+                        const label = nodeMeta ? `#${nodeId} ${nodeMeta.title}` : `Node #${nodeId}`;
+                        return (
+                          <li key={nodeId} className={`group-node-entry mode-${modeLabel(mode)}`}>
+                            {label} → <strong>{modeLabel(mode)}</strong>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="group-node-empty">All nodes active</p>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="group-save-form">
+              <input
+                type="text"
+                className="group-name-input"
+                placeholder="Group name (e.g. No FaceDetailer)..."
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key !== 'Enter' || !newGroupName.trim()) return;
+                  const clean: Record<string, number> = {};
+                  for (const [id, m] of Object.entries(localNodeModes)) {
+                    if (m !== 0) clean[id] = m;
+                  }
+                  setLocalBypassGroups(prev => [...prev, {
+                    id: crypto.randomUUID(),
+                    name: newGroupName.trim(),
+                    nodeModes: clean,
+                  }]);
+                  setNewGroupName('');
+                  setHasChanges(true);
+                }}
+              />
+              <button
+                className="group-save-btn"
+                disabled={!newGroupName.trim()}
+                onClick={() => {
+                  const clean: Record<string, number> = {};
+                  for (const [id, m] of Object.entries(localNodeModes)) {
+                    if (m !== 0) clean[id] = m;
+                  }
+                  setLocalBypassGroups(prev => [...prev, {
+                    id: crypto.randomUUID(),
+                    name: newGroupName.trim(),
+                    nodeModes: clean,
+                  }]);
+                  setNewGroupName('');
+                  setHasChanges(true);
+                }}
+              >
+                + Save current state as group
+              </button>
+            </div>
           </div>
         )}
       </div>

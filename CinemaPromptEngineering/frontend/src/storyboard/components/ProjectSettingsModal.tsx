@@ -20,6 +20,9 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
   const [path, setPath] = useState(settings.path);
   const [namingTemplate, setNamingTemplate] = useState(settings.namingTemplate);
   const [autoSave, setAutoSave] = useState(settings.autoSave);
+  const [bypassGroupApplyMode, setBypassGroupApplyMode] = useState<'replace' | 'merge'>(
+    settings.bypassGroupApplyMode ?? 'replace'
+  );
   const [orchestratorUrl, setOrchestratorUrl] = useState(settings.orchestratorUrl || getDefaultOrchestratorUrl());
   const [orchestratorStatus, setOrchestratorStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
@@ -37,6 +40,7 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
       setPath(settings.path);
       setNamingTemplate(settings.namingTemplate);
       setAutoSave(settings.autoSave);
+      setBypassGroupApplyMode(settings.bypassGroupApplyMode ?? 'replace');
       setOrchestratorUrl(settings.orchestratorUrl || getDefaultOrchestratorUrl());
     }
   }, [isOpen, settings]);
@@ -63,7 +67,7 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
   if (!isOpen) return null;
   
   const handleSave = () => {
-    onSave({ name, path, namingTemplate, autoSave, orchestratorUrl });
+    onSave({ name, path, namingTemplate, autoSave, orchestratorUrl, bypassGroupApplyMode });
     onClose();
   };
 
@@ -214,7 +218,25 @@ export function ProjectSettingsModal({ isOpen, onClose, settings, onSave }: Proj
               Automatically save images when generation completes (requires output folder).
             </small>
           </div>
-          
+
+          <div className="settings-section">
+            <h3>Workflow</h3>
+            <div className="form-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={bypassGroupApplyMode === 'merge'}
+                  onChange={e => setBypassGroupApplyMode(e.target.checked ? 'merge' : 'replace')}
+                />
+                Apply bypass groups additively (merge with current state)
+              </label>
+              <small className="help-text">
+                Off (default): applying a group resets all other nodes to Active first.
+                On: only nodes listed in the group are changed; others keep their current mode.
+              </small>
+            </div>
+          </div>
+
           <div className="template-examples">
             <h4>Common Templates:</h4>
             <div className="template-list">

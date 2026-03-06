@@ -13,7 +13,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 import { ParameterPanel } from './components/ParameterWidgets';
-import { WorkflowEditor, ParameterConfig } from './components/WorkflowEditor';
+import { WorkflowEditor, ParameterConfig, BypassGroup } from './components/WorkflowEditor';
 import { getWorkflowParser, ComfyUIWorkflow, ParsedWorkflow, normalizeWorkflowPaths, detectNodeOS, TargetOS } from './services/workflow-parser';
 import { CameraAngle } from './data/cameraAngleData';
 import { useErrorNotifications, ErrorNotificationContainer } from './components/ErrorNotification';
@@ -250,6 +250,7 @@ export interface Workflow {
   config: ParameterConfig[];
   createdAt?: number;
   categories?: WorkflowCategory[]; // Multiple functional categories
+  bypassGroups?: BypassGroup[];
 }
 
 // SystemStats interface removed - using any for now
@@ -6068,13 +6069,15 @@ export function StoryboardUI() {
               workflow={editingWorkflow.workflow}
               parsedWorkflow={editingWorkflow.parsed}
               initialConfig={editingWorkflow.config}
+              initialBypassGroups={editingWorkflow.bypassGroups ?? []}
+              bypassGroupApplyMode={projectSettings.bypassGroupApplyMode ?? 'replace'}
               comfyUrl={comfyUrl}
-              onSave={(config, nodeModes) => {
+              onSave={(config, nodeModes, bypassGroups) => {
                 skipParameterReset.current = true;
                 setWorkflows(prev => prev.map(w => {
                   if (w.id !== editingWorkflow.id) return w;
                   const updatedWorkflow = applyNodeModesToWorkflow(w.workflow, nodeModes);
-                  return { ...w, config, workflow: updatedWorkflow };
+                  return { ...w, config, workflow: updatedWorkflow, bypassGroups };
                 }));
                 setShowWorkflowEditor(false);
                 addLog('info', `Updated workflow: ${editingWorkflow.name}`);
