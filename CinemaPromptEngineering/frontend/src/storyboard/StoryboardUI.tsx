@@ -262,6 +262,24 @@ interface LogEntry {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+function applyNodeModesToWorkflow(
+  workflow: ComfyUIWorkflow,
+  modes: Record<string, number>
+): ComfyUIWorkflow {
+  const updated = JSON.parse(JSON.stringify(workflow)) as ComfyUIWorkflow;
+  for (const [nodeId, mode] of Object.entries(modes)) {
+    const node = updated[nodeId] as any;
+    if (!node) continue;
+    if (mode === 0) delete node.mode;
+    else node.mode = mode;
+  }
+  return updated;
+}
+
+// ============================================================================
 // StoryboardUI Component
 // ============================================================================
 
@@ -6051,11 +6069,13 @@ export function StoryboardUI() {
               parsedWorkflow={editingWorkflow.parsed}
               initialConfig={editingWorkflow.config}
               comfyUrl={comfyUrl}
-              onSave={(config) => {
+              onSave={(config, nodeModes) => {
                 skipParameterReset.current = true;
-                setWorkflows(prev => prev.map(w =>
-                  w.id === editingWorkflow.id ? { ...w, config } : w
-                ));
+                setWorkflows(prev => prev.map(w => {
+                  if (w.id !== editingWorkflow.id) return w;
+                  const updatedWorkflow = applyNodeModesToWorkflow(w.workflow, nodeModes);
+                  return { ...w, config, workflow: updatedWorkflow };
+                }));
                 setShowWorkflowEditor(false);
                 addLog('info', `Updated workflow: ${editingWorkflow.name}`);
               }}
