@@ -44,6 +44,7 @@ export interface ProjectSettings {
   autoSave: boolean;
   orchestratorUrl: string; // URL to Orchestrator API (e.g., "http://localhost:9820")
   bypassGroupApplyMode?: 'replace' | 'merge'; // default: 'replace'
+  comfyUiPath?: string; // Path to ComfyUI installation directory (for Model Browser)
   created: Date;
   lastModified: Date;
 }
@@ -146,6 +147,7 @@ const DEFAULT_PROJECT: ProjectSettings = {
   autoSave: false,
   orchestratorUrl: getDefaultOrchestratorUrl(),
   bypassGroupApplyMode: 'replace',
+  comfyUiPath: '',
   created: new Date(),
   lastModified: new Date(),
 };
