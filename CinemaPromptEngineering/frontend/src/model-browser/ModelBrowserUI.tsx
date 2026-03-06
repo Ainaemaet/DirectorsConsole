@@ -9,8 +9,8 @@
  * Download drawer: slide-up panel with SSE progress for active downloads.
  */
 
-import { useEffect, useMemo, useCallback } from 'react';
-import { useModelBrowserStore } from './store/model-browser-store';
+import React, { useEffect, useMemo, useCallback } from 'react';
+import { useModelBrowserStore, type NsfwMode } from './store/model-browser-store';
 import { isModelNsfw } from './services/model-browser-service';
 import { ModelCard } from './components/ModelCard';
 import { ModelDetailPanel } from './components/ModelDetailPanel';
@@ -40,6 +40,7 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     error,
     activeView,
     nsfwMode,
+    cardSize,
     downloadTasks,
     downloadDrawerOpen,
     setSelectedCategory,
@@ -50,6 +51,7 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     clearError,
     setActiveView,
     setNsfwMode,
+    setCardSize,
     setDownloadDrawerOpen,
     loadConfig,
     loadModels,
@@ -82,9 +84,11 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
   const displayModels = useMemo(() => {
     let list = models;
 
-    // Apply NSFW filter (hidden mode removes .nsfw folder models)
+    // Apply NSFW filter
     if (nsfwMode === 'hidden') {
       list = list.filter((m) => !isModelNsfw(m));
+    } else if (nsfwMode === 'only-nsfw') {
+      list = list.filter((m) => isModelNsfw(m));
     }
 
     if (searchQuery.trim()) {
@@ -153,15 +157,20 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
   ).length;
 
   const cycleNsfwMode = () => {
-    const next = nsfwMode === 'hidden' ? 'blurred' : nsfwMode === 'blurred' ? 'visible' : 'hidden';
+    const cycle: NsfwMode[] = ['hidden', 'blurred', 'visible', 'only-nsfw'];
+    const next = cycle[(cycle.indexOf(nsfwMode) + 1) % cycle.length];
     setNsfwMode(next);
   };
 
-  const nsfwIcon = nsfwMode === 'hidden' ? '🚫' : nsfwMode === 'blurred' ? '👁️' : '👁️‍🗨️';
+  const nsfwIcon =
+    nsfwMode === 'hidden'    ? '🚫' :
+    nsfwMode === 'blurred'   ? '👁️' :
+    nsfwMode === 'only-nsfw' ? '🔞' : '👁️‍🗨️';
   const nsfwTitle =
-    nsfwMode === 'hidden' ? 'NSFW: Hidden (click to blur)' :
-    nsfwMode === 'blurred' ? 'NSFW: Blurred (click to show)' :
-    'NSFW: Visible (click to hide)';
+    nsfwMode === 'hidden'    ? 'NSFW: Hidden — click to blur' :
+    nsfwMode === 'blurred'   ? 'NSFW: Blurred — click to show all' :
+    nsfwMode === 'visible'   ? 'NSFW: Visible — click to show only NSFW' :
+                               'NSFW: Only NSFW — click to hide';
 
   // ── Empty state: ComfyUI path not set ──────────────────────────────────
   if (!comfyUiPath) {
@@ -182,8 +191,13 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     );
   }
 
+  const cardSizeCss = {
+    '--mb-card-width': `${cardSize}px`,
+    '--mb-card-thumb-height': `${Math.round(cardSize * 0.9)}px`,
+  } as React.CSSProperties;
+
   return (
-    <div className="mb-root">
+    <div className="mb-root" style={cardSizeCss}>
       {/* ── Toolbar ───────────────────────────────────────────────────── */}
       <div className="mb-toolbar">
         {/* View toggle */}
@@ -261,6 +275,18 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
 
         <div className="mb-toolbar__spacer" />
 
+        {/* Card size slider */}
+        <input
+          className="mb-toolbar__size-slider"
+          type="range"
+          min={100}
+          max={360}
+          step={10}
+          value={cardSize}
+          onChange={(e) => setCardSize(Number(e.target.value))}
+          title={`Card size: ${cardSize}px`}
+        />
+
         {/* NSFW toggle */}
         <button
           className="mb-toolbar__nsfw"
@@ -293,6 +319,7 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
       {activeView === 'discover' && (
         <DiscoverPanel
           orchestratorUrl={orchestratorUrl}
+          comfyUiPath={comfyUiPath}
           categories={categories}
         />
       )}

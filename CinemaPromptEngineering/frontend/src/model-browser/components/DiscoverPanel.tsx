@@ -16,6 +16,8 @@ import {
   deleteApiKey,
   startCivitaiDownload,
   startHuggingFaceDownload,
+  fetchSubfolders,
+  fetchCivitaiBaseModels,
   formatBytes,
   type CivitaiModel,
   type HFModel,
@@ -25,6 +27,7 @@ import { useModelBrowserStore } from '../store/model-browser-store';
 
 interface DiscoverPanelProps {
   orchestratorUrl: string;
+  comfyUiPath: string;
   /** Category → base path list (from config) */
   categories: Record<string, string[]>;
 }
@@ -33,13 +36,17 @@ type Source = 'civitai' | 'huggingface';
 
 const CIVITAI_TYPES = [
   'Checkpoint', 'LORA', 'LoCon', 'DoRA', 'Controlnet',
-  'TextualInversion', 'VAE', 'Upscaler', 'Hypernetwork', 'Other',
+  'TextualInversion', 'VAE', 'Upscaler', 'Hypernetwork',
+  'MotionModule', 'Wildcards', 'Workflows', 'Poses', 'Other',
 ];
-const CIVITAI_SORTS = ['Most Downloaded', 'Highest Rated', 'Newest', 'Most Discussed'];
+const CIVITAI_SORTS = ['Most Downloaded', 'Highest Rated', 'Newest', 'Most Discussed', 'Most Collected', 'Most Buzz'];
 const CIVITAI_PERIODS = ['AllTime', 'Year', 'Month', 'Week', 'Day'];
-const CIVITAI_BASE_MODELS = [
-  'Flux.1 D', 'Flux.1 S', 'SDXL 1.0', 'SD 1.5', 'SD 3', 'SD 3.5',
-  'HunyuanVideo', 'Wan Video', 'LTX-Video', 'Pony', 'Illustrious',
+// Compact static fallback — the full list is fetched dynamically from the backend
+const CIVITAI_BASE_MODELS_STATIC = [
+  'Flux.1 D', 'Flux.1 S', 'Flux.1 Dev', 'Flux.1 Schnell', 'FLUX Klein',
+  'SD 1.5', 'SDXL 1.0', 'Pony', 'Illustrious', 'NoobAI',
+  'SD 3', 'SD 3.5', 'SD 3.5 Large', 'SD 3.5 Medium',
+  'HunyuanVideo', 'Wan Video', 'LTX-Video', 'CogVideoX', 'Mochi',
 ];
 const HF_FILTERS = [
   '', 'text-to-image', 'image-to-image', 'text-to-video',
@@ -58,8 +65,17 @@ const CIVITAI_TYPE_TO_CATEGORY: Record<string, string> = {
   TextualInversion: 'embeddings',
 };
 
-export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProps) {
-  const { addDownloadTask } = useModelBrowserStore();
+export function DiscoverPanel({ orchestratorUrl, comfyUiPath, categories }: DiscoverPanelProps) {
+  const { addDownloadTask, nsfwMode } = useModelBrowserStore();
+
+  // ── Dynamic base models ───────────────────────────────────────────────────
+  const [baseModels, setBaseModels] = useState<string[]>(CIVITAI_BASE_MODELS_STATIC);
+  useEffect(() => {
+    if (!orchestratorUrl) return;
+    fetchCivitaiBaseModels(orchestratorUrl)
+      .then((list) => { if (list.length > 0) setBaseModels(list); })
+      .catch(() => {});
+  }, [orchestratorUrl]);
 
   const [source, setSource] = useState<Source>('civitai');
 
@@ -192,6 +208,20 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
   const [dlPathIndex, setDlPathIndex] = useState(0);
   const [dlSubfolder, setDlSubfolder] = useState('');
   const [dlBusy, setDlBusy] = useState(false);
+  const [dlSubfolderOptions, setDlSubfolderOptions] = useState<string[]>([]);
+
+  // Fetch existing subfolders when category changes
+  useEffect(() => {
+    if (!dlCategory || !orchestratorUrl) { setDlSubfolderOptions([]); return; }
+    // Find a comfy_ui_path from the first available base path
+    // We only need it to resolve extra_model_paths.yaml — use a dummy approach:
+    // pass first base path's parent directories up until we find extra_model_paths.yaml
+    // For simplicity, derive from categories prop (paths are absolute)
+    if (!comfyUiPath) return;
+    fetchSubfolders(orchestratorUrl, comfyUiPath, dlCategory)
+      .then(setDlSubfolderOptions)
+      .catch(() => setDlSubfolderOptions([]));
+  }, [dlCategory, orchestratorUrl, comfyUiPath]);
 
   // Auto-suggest category from Civitai model type
   useEffect(() => {
@@ -301,6 +331,8 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
     const files = ver?.files ?? [];
     const images = ver?.images ?? [];
     const previewUrl = images[0]?.url ?? '';
+    const earlyAccessEndsAt = ver?.earlyAccessEndsAt ?? ver?.earlyAccess?.endsAt ?? '';
+    const isEarlyAccess = earlyAccessEndsAt && new Date(earlyAccessEndsAt) > new Date();
 
     return (
       <div className="disc-detail">
@@ -315,6 +347,12 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
           <span>{detail.stats?.downloadCount?.toLocaleString() ?? 0} downloads</span>
           <span>{detail.stats?.rating?.toFixed(1) ?? '—'} &#9733; ({detail.stats?.ratingCount ?? 0})</span>
         </div>
+        {isEarlyAccess && (
+          <div className="disc-detail__early-access">
+            🔒 Early Access — ends {new Date(earlyAccessEndsAt).toLocaleDateString()}
+            <br /><small>May require a Civitai membership to download.</small>
+          </div>
+        )}
         {versions.length > 1 && (
           <div className="disc-detail__row">
             <label className="disc-detail__label">Version</label>
@@ -353,10 +391,14 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
           <input
             className="disc-detail__input"
             type="text"
+            list="disc-subfolder-list"
             placeholder="subfolder (optional)"
             value={dlSubfolder}
             onChange={(e) => setDlSubfolder(e.target.value)}
           />
+          <datalist id="disc-subfolder-list">
+            {dlSubfolderOptions.map((s) => <option key={s} value={s} />)}
+          </datalist>
         </div>
         <div className="disc-detail__files">
           {files.map((f: { name: string; downloadUrl: string; sizeKB: number; primary?: boolean }, i: number) => (
@@ -412,10 +454,14 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
           <input
             className="disc-detail__input"
             type="text"
+            list="disc-subfolder-list"
             placeholder="subfolder (optional)"
             value={dlSubfolder}
             onChange={(e) => setDlSubfolder(e.target.value)}
           />
+          <datalist id="disc-subfolder-list">
+            {dlSubfolderOptions.map((s) => <option key={s} value={s} />)}
+          </datalist>
         </div>
         <div className="disc-detail__files">
           {files.siblings.map((f, i) => (
@@ -498,7 +544,7 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
                 </select>
                 <select className="disc-select" value={cvBaseModel} onChange={(e) => setCvBaseModel(e.target.value)}>
                   <option value="">All bases</option>
-                  {CIVITAI_BASE_MODELS.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {baseModels.map((b) => <option key={b} value={b}>{b}</option>)}
                 </select>
                 <select className="disc-select" value={cvSort} onChange={(e) => setCvSort(e.target.value)}>
                   {CIVITAI_SORTS.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -516,14 +562,21 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
               </div>
               {cvError && <div className="disc-error">{cvError}</div>}
               <div className="disc-cards">
-                {cvResults.map((m) => (
-                  <CivitaiCard
-                    key={m.id}
-                    model={m}
-                    selected={cvSelected?.id === m.id}
-                    onClick={() => setCvSelected(cvSelected?.id === m.id ? null : m)}
-                  />
-                ))}
+                {cvResults
+                  .filter((m) => {
+                    if (!m.nsfw) return true;
+                    if (nsfwMode === 'hidden') return false;
+                    return true; // blurred/visible/only-nsfw all show
+                  })
+                  .map((m) => (
+                    <CivitaiCard
+                      key={m.id}
+                      model={m}
+                      selected={cvSelected?.id === m.id}
+                      nsfwMode={nsfwMode}
+                      onClick={() => setCvSelected(cvSelected?.id === m.id ? null : m)}
+                    />
+                  ))}
                 {cvResults.length === 0 && !cvLoading && (
                   <div className="disc-empty">Search Civitai to discover models.</div>
                 )}
@@ -596,23 +649,33 @@ export function DiscoverPanel({ orchestratorUrl, categories }: DiscoverPanelProp
 
 // ── Small Civitai card ─────────────────────────────────────────────────────────
 
-function CivitaiCard({ model, selected, onClick }: {
+function CivitaiCard({ model, selected, nsfwMode, onClick }: {
   model: CivitaiModel;
   selected: boolean;
+  nsfwMode: string;
   onClick: () => void;
 }) {
   const ver = model.modelVersions?.[0];
   const thumb = ver?.images?.[0]?.url ?? '';
   const [imgErr, setImgErr] = useState(false);
+  const blurred = model.nsfw && nsfwMode === 'blurred';
 
   return (
-    <div className={`disc-cv-card ${selected ? 'disc-cv-card--selected' : ''}`} onClick={onClick}>
+    <div className={`disc-cv-card ${selected ? 'disc-cv-card--selected' : ''} ${model.nsfw ? 'disc-cv-card--nsfw' : ''}`} onClick={onClick}>
       <div className="disc-cv-card__thumb">
-        {thumb && !imgErr
-          ? <img src={thumb} alt={model.name} loading="lazy" onError={() => setImgErr(true)} />
-          : <div className="disc-cv-card__placeholder">&#129504;</div>
-        }
+        {blurred && (
+          <div className="disc-cv-card__nsfw-overlay">
+            <span>🔞</span>
+          </div>
+        )}
+        <div className={blurred ? 'disc-cv-card__thumb-blur' : ''}>
+          {thumb && !imgErr
+            ? <img src={thumb} alt={model.name} loading="lazy" onError={() => setImgErr(true)} />
+            : <div className="disc-cv-card__placeholder">&#129504;</div>
+          }
+        </div>
         <span className="disc-cv-card__type">{model.type}</span>
+        {model.nsfw && <span className="disc-cv-card__nsfw-badge">NSFW</span>}
       </div>
       <div className="disc-cv-card__info">
         <span className="disc-cv-card__name">{model.name}</span>

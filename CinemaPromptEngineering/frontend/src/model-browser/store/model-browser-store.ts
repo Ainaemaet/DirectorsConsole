@@ -13,15 +13,26 @@ import {
   removeDownload,
 } from '../services/model-browser-service';
 
-export type NsfwMode = 'hidden' | 'blurred' | 'visible';
+export type NsfwMode = 'hidden' | 'blurred' | 'visible' | 'only-nsfw';
 export type ActiveView = 'library' | 'discover';
 
 function loadNsfwMode(): NsfwMode {
   try {
     const v = localStorage.getItem('mb_nsfw_mode');
-    if (v === 'blurred' || v === 'visible') return v;
+    if (v === 'blurred' || v === 'visible' || v === 'only-nsfw') return v;
   } catch { /* ignore */ }
   return 'hidden';
+}
+
+function loadCardSize(): number {
+  try {
+    const v = localStorage.getItem('mb_card_size');
+    if (v) {
+      const n = parseInt(v, 10);
+      if (n >= 100 && n <= 400) return n;
+    }
+  } catch { /* ignore */ }
+  return 160;
 }
 
 interface ModelBrowserStore {
@@ -52,6 +63,9 @@ interface ModelBrowserStore {
   // NSFW
   nsfwMode: NsfwMode;
 
+  // Card size (px)
+  cardSize: number;
+
   // Download queue
   downloadTasks: DownloadTask[];
   downloadDrawerOpen: boolean;
@@ -65,6 +79,7 @@ interface ModelBrowserStore {
   clearError: () => void;
   setActiveView: (v: ActiveView) => void;
   setNsfwMode: (m: NsfwMode) => void;
+  setCardSize: (size: number) => void;
   setDownloadDrawerOpen: (open: boolean) => void;
 
   // Async
@@ -98,6 +113,7 @@ export const useModelBrowserStore = create<ModelBrowserStore>((set, get) => ({
 
   activeView: 'library',
   nsfwMode: loadNsfwMode(),
+  cardSize: loadCardSize(),
 
   downloadTasks: [],
   downloadDrawerOpen: false,
@@ -112,6 +128,10 @@ export const useModelBrowserStore = create<ModelBrowserStore>((set, get) => ({
   setNsfwMode: (m) => {
     try { localStorage.setItem('mb_nsfw_mode', m); } catch { /* ignore */ }
     set({ nsfwMode: m });
+  },
+  setCardSize: (size) => {
+    try { localStorage.setItem('mb_card_size', String(size)); } catch { /* ignore */ }
+    set({ cardSize: size });
   },
   setDownloadDrawerOpen: (open) => set({ downloadDrawerOpen: open }),
 

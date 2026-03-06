@@ -231,21 +231,45 @@ def _strip_html(text: str) -> str:
 def _find_preview(model_path: Path) -> str:
     """Find the best preview image/video for a model file.
 
-    Priority order:
-    1. Path stored in metadata.json's preview_url field (already resolved by caller)
-    2. {stem}{ext} — direct match (e.g. model.webp)
-    3. {stem}.preview{ext} — explicit preview variant (e.g. model.preview.png)
+    Checks these stem-based patterns in priority order:
+      {stem}{ext}            bare stem     e.g. model.webp
+      {stem}.preview{ext}    explicit      e.g. model.preview.png
+      {stem}_preview{ext}    underscore    e.g. model_preview.jpg
+      {stem}-preview{ext}    hyphen        e.g. model-preview.png
+      {stem}.thumb{ext}      thumbnail     e.g. model.thumb.jpg
+
+    Falls back to a case-insensitive prefix scan of the directory for any
+    image/video whose filename begins with the model stem (catches naming
+    conventions used by A1111, Forge, ComfyUI-Model-Manager, etc.)
     """
     stem = model_path.stem
     parent = model_path.parent
 
-    for ext in ALL_PREVIEW_EXTS:
-        candidate = parent / f"{stem}{ext}"
-        if candidate.exists():
-            return str(candidate)
-        candidate = parent / f"{stem}.preview{ext}"
-        if candidate.exists():
-            return str(candidate)
+    patterns = [
+        stem,
+        f"{stem}.preview",
+        f"{stem}_preview",
+        f"{stem}-preview",
+        f"{stem}.thumb",
+    ]
+
+    for pattern in patterns:
+        for ext in ALL_PREVIEW_EXTS:
+            candidate = parent / f"{pattern}{ext}"
+            if candidate.exists():
+                return str(candidate)
+
+    # Fuzzy fallback: any media file in same directory whose stem starts with
+    # our model stem (case-insensitive). Avoids false-positives from short stems
+    # by requiring the match file to have a recognised media extension.
+    all_exts = set(e.lower() for e in ALL_PREVIEW_EXTS)
+    stem_lower = stem.lower()
+    try:
+        for entry in sorted(parent.iterdir()):
+            if entry.suffix.lower() in all_exts and entry.stem.lower().startswith(stem_lower):
+                return str(entry)
+    except OSError:
+        pass
 
     return ""
 
@@ -516,6 +540,46 @@ async def get_model_detail(
         notes_md=notes_md,
         safetensors_meta=safetensors_meta,
     )
+
+
+@router.get("/subfolders")
+async def get_subfolders(
+    category: str = Query(..., description="Model category key"),
+    comfy_ui_path: str = Query(..., description="Path to ComfyUI installation directory"),
+) -> dict:
+    """Return all existing subfolder paths under the given category's base paths.
+
+    Used by the frontend to populate a datalist for the subfolder input so users
+    can autocomplete into an existing subfolder rather than typing from scratch.
+    """
+    is_safe, err = _is_path_safe(comfy_ui_path)
+    if not is_safe:
+        raise HTTPException(status_code=400, detail=err)
+
+    yaml_path = Path(comfy_ui_path) / "extra_model_paths.yaml"
+
+    def _collect() -> list[str]:
+        if not yaml_path.exists():
+            return []
+        cats = _parse_extra_model_paths(yaml_path)
+        paths = cats.get(category, [])
+        subfolders: set[str] = set()
+        for path_str in paths:
+            root = Path(path_str)
+            if not root.exists():
+                continue
+            for dirpath, _dirnames, _filenames in os.walk(root):
+                dir_path = Path(dirpath)
+                try:
+                    rel = str(dir_path.relative_to(root))
+                    if rel and rel != ".":
+                        subfolders.add(rel)
+                except ValueError:
+                    pass
+        return sorted(subfolders)
+
+    subfolders = await asyncio.to_thread(_collect)
+    return {"subfolders": subfolders}
 
 
 class SearchResponse(BaseModel):

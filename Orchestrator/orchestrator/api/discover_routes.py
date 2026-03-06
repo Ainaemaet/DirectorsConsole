@@ -7,6 +7,7 @@ leave the server.  Results are returned as-is from the upstream APIs
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -16,6 +17,10 @@ from pydantic import BaseModel
 from orchestrator.api import key_store
 
 router = APIRouter(prefix="/api/discover", tags=["discover"])
+
+# 1-hour cache for base models list
+_BASE_MODELS_CACHE: dict[str, Any] = {"ts": 0.0, "data": []}
+_BASE_MODELS_TTL = 3600.0
 
 _CIVITAI_BASE = "https://civitai.com/api/v1"
 _HF_BASE = "https://huggingface.co/api"
@@ -121,6 +126,80 @@ async def civitai_model_detail(model_id: int) -> Any:
             raise HTTPException(status_code=exc.response.status_code, detail=str(exc))
         except httpx.RequestError as exc:
             raise HTTPException(status_code=503, detail=f"Civitai unreachable: {exc}")
+
+
+@router.get("/civitai/base-models")
+async def civitai_base_models() -> Any:
+    """Return a merged list of known Civitai base model names.
+
+    Combines an expanded hardcoded list with values extracted from a live
+    Civitai query (cached 1 hour) so the filter dropdown stays current as
+    new base models are added on Civitai.
+    """
+    # Comprehensive static list — covers all known bases as of 2025
+    STATIC_BASE_MODELS = [
+        # Stable Diffusion 1.x / 2.x
+        "SD 1.4", "SD 1.5", "SD 1.5 LCM", "SD 1.5 Hyper",
+        "SD 2.0", "SD 2.0 768", "SD 2.1", "SD 2.1 768", "SD 2.1 Unclip",
+        # SDXL family
+        "SDXL 1.0", "SDXL 1.0 LCM", "SDXL Distilled", "SDXL Hyper",
+        "SDXL Turbo", "SDXL Lightning", "SDXL Merge",
+        "Stable Cascade",
+        # Pony / Illustrious / NoobAI
+        "Pony", "Illustrious", "NoobAI", "AstolfoMix",
+        # SD 3.x
+        "SD 3", "SD 3.5", "SD 3.5 Medium", "SD 3.5 Large", "SD 3.5 Large Turbo",
+        # Flux family
+        "Flux.1 D", "Flux.1 S", "Flux.1 Dev", "Flux.1 Schnell",
+        "Flux.1 [dev] fp8", "FLUX.1 Merge", "FLUX Klein",
+        "Flux.1 Hyper",
+        # Video models
+        "HunyuanVideo", "Wan Video", "LTX-Video", "CogVideoX",
+        "CogVideoX-5B", "Mochi",
+        # Image models
+        "AuraFlow", "Kolors", "PixArt-α", "PixArt-Σ",
+        "HunyuanDiT", "Lumina",
+        # Inpainting / specialised
+        "SDXL Inpainting", "SD 1.5 Inpainting",
+        # Catch-all
+        "Other",
+    ]
+
+    # Return cached live data if fresh
+    if time.monotonic() - _BASE_MODELS_CACHE["ts"] < _BASE_MODELS_TTL and _BASE_MODELS_CACHE["data"]:
+        return {"base_models": _BASE_MODELS_CACHE["data"]}
+
+    # Attempt to augment with live Civitai data
+    live_bases: list[str] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{_CIVITAI_BASE}/models",
+                params=[("limit", "100"), ("sort", "Highest Rated"), ("period", "Month")],
+                headers=_civitai_headers(),
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data.get("items", []):
+                    for ver in item.get("modelVersions", []):
+                        bm = ver.get("baseModel", "")
+                        if bm and bm not in live_bases:
+                            live_bases.append(bm)
+    except Exception:
+        pass  # Fall back to static list
+
+    # Merge: static first, then any live entries not already present
+    merged = list(STATIC_BASE_MODELS)
+    static_lower = {b.lower() for b in merged}
+    for b in live_bases:
+        if b.lower() not in static_lower:
+            merged.append(b)
+            static_lower.add(b.lower())
+
+    merged.sort()
+    _BASE_MODELS_CACHE["ts"] = time.monotonic()
+    _BASE_MODELS_CACHE["data"] = merged
+    return {"base_models": merged}
 
 
 # ── HuggingFace ────────────────────────────────────────────────────────────────

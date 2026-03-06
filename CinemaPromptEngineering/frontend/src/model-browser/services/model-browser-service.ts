@@ -289,6 +289,26 @@ export async function hfModelFiles(orchestratorUrl: string, repoId: string): Pro
   return apiGet(`${orchestratorUrl}/api/discover/huggingface/models/${repoId}/files`);
 }
 
+export async function fetchSubfolders(
+  orchestratorUrl: string,
+  comfyUiPath: string,
+  category: string
+): Promise<string[]> {
+  const url =
+    `${orchestratorUrl}/api/model-browser/subfolders` +
+    `?category=${encodeURIComponent(category)}` +
+    `&comfy_ui_path=${encodeURIComponent(comfyUiPath)}`;
+  const data = await apiGet<{ subfolders: string[] }>(url);
+  return data.subfolders ?? [];
+}
+
+export async function fetchCivitaiBaseModels(orchestratorUrl: string): Promise<string[]> {
+  const data = await apiGet<{ base_models: string[] }>(
+    `${orchestratorUrl}/api/discover/civitai/base-models`
+  );
+  return data.base_models ?? [];
+}
+
 // ── NSFW helpers ──────────────────────────────────────────────────────────────
 
 /** Returns true if the model lives inside a .nsfw subfolder. */
