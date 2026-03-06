@@ -145,7 +145,7 @@ function DirectorsConsole() {
             <PromptEditorUI isActive={activeTab === 'prompts'} />
           </ErrorBoundary>
         </div>
-        <div style={{ display: activeTab === 'studio' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+        <div style={{ display: activeTab === 'studio' ? 'flex' : 'none', flex: 1, overflow: 'hidden', height: '100%', width: '100%' }}>
           <ErrorBoundary>
             <StudioUI
               orchestratorUrl={galleryOrchestratorUrl}
