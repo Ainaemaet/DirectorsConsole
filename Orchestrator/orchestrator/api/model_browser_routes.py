@@ -13,6 +13,7 @@ import json
 import os
 import re
 import struct
+import time
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,43 @@ PREVIEW_VIDEO_EXTS: list[str] = [".mp4", ".webm"]
 ALL_PREVIEW_EXTS: list[str] = PREVIEW_VIDEO_EXTS + PREVIEW_IMAGE_EXTS
 
 router = APIRouter(prefix="/api/model-browser", tags=["model-browser"])
+
+# ---------------------------------------------------------------------------
+# In-memory scan cache
+# ---------------------------------------------------------------------------
+# Keyed by (comfy_ui_path, category).  Each entry: { "ts": float, "models": list }
+# TTL: 300 seconds.  Invalidated by download_manager.cache_version changes.
+_SCAN_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_SCAN_CACHE_TTL = 300.0
+_SCAN_CACHE_MAX = 20          # LRU cap: evict oldest when full
+_last_cache_version: int = -1  # tracks download_manager version
+
+
+def _cache_get(comfy_ui_path: str, category: str) -> list[ModelEntry] | None:
+    """Return cached models if still fresh, else None."""
+    try:
+        from orchestrator.download_manager import download_manager
+        global _last_cache_version
+        if download_manager.cache_version != _last_cache_version:
+            _SCAN_CACHE.clear()
+            _last_cache_version = download_manager.cache_version
+    except ImportError:
+        pass
+
+    key = (comfy_ui_path, category)
+    entry = _SCAN_CACHE.get(key)
+    if entry and (time.monotonic() - entry["ts"]) < _SCAN_CACHE_TTL:
+        return entry["models"]
+    return None
+
+
+def _cache_set(comfy_ui_path: str, category: str, models: list[ModelEntry]) -> None:
+    key = (comfy_ui_path, category)
+    if len(_SCAN_CACHE) >= _SCAN_CACHE_MAX:
+        # Evict oldest entry
+        oldest = min(_SCAN_CACHE, key=lambda k: _SCAN_CACHE[k]["ts"])
+        del _SCAN_CACHE[oldest]
+    _SCAN_CACHE[key] = {"ts": time.monotonic(), "models": models}
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +445,11 @@ async def get_models(
     if not is_safe:
         raise HTTPException(status_code=400, detail=f"Invalid path: {err}")
 
+    # Serve from cache if available
+    cached = _cache_get(comfy_ui_path, category)
+    if cached is not None:
+        return ModelsResponse(success=True, models=cached)
+
     yaml_path = Path(comfy_ui_path) / "extra_model_paths.yaml"
 
     def _load_and_scan() -> list[ModelEntry]:
@@ -425,6 +468,7 @@ async def get_models(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to scan models: {e}")
 
+    _cache_set(comfy_ui_path, category, models)
     return ModelsResponse(success=True, models=models)
 
 
@@ -472,3 +516,104 @@ async def get_model_detail(
         notes_md=notes_md,
         safetensors_meta=safetensors_meta,
     )
+
+
+class SearchResponse(BaseModel):
+    success: bool
+    models: list[ModelEntry]
+    message: str = ""
+
+
+def _matches_query(model: ModelEntry, q: str) -> bool:
+    """Return True if q matches any searchable field of model (case-insensitive).
+
+    Subfolder path segments are checked individually so a partial name like
+    '-LT' matches a model inside '.../Lora/-LTX-/...'
+    """
+    ql = q.lower()
+
+    # Direct string fields
+    if (
+        ql in model.name.lower()
+        or ql in model.filename.lower()
+        or ql in model.base_model.lower()
+        or ql in model.description.lower()
+        or any(ql in t.lower() for t in model.tags)
+        or any(ql in w.lower() for w in model.trained_words)
+    ):
+        return True
+
+    # Each path segment of subfolder checked individually
+    # e.g. subfolder = "FluxLora/-LTX-/Character" → segments are searched too
+    segments = re.split(r"[/\\]", model.subfolder)
+    if any(ql in seg.lower() for seg in segments if seg):
+        return True
+
+    # Also check full path segments (model may be in a deeply nested dir)
+    path_segments = re.split(r"[/\\]", model.path)
+    if any(ql in seg.lower() for seg in path_segments if seg):
+        return True
+
+    return False
+
+
+@router.get("/search", response_model=SearchResponse)
+async def search_models(
+    q: str = Query(..., description="Search query (partial string)"),
+    comfy_ui_path: str = Query(..., description="Path to ComfyUI installation directory"),
+    categories: str = Query("", description="Comma-separated category filter; empty = all"),
+    limit: int = Query(200, ge=1, le=1000),
+) -> SearchResponse:
+    """Search models across all (or specified) categories.
+
+    Matches against name, filename, subfolder path segments, base_model,
+    tags, trained_words, and description.  Results are served from the
+    scan cache where possible; uncached categories are scanned on demand.
+    """
+    is_safe, err = _is_path_safe(comfy_ui_path)
+    if not is_safe:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {err}")
+
+    yaml_path = Path(comfy_ui_path) / "extra_model_paths.yaml"
+
+    def _get_all_categories() -> dict[str, list[str]]:
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"extra_model_paths.yaml not found at: {yaml_path}")
+        return _parse_extra_model_paths(yaml_path)
+
+    try:
+        all_categories = await asyncio.to_thread(_get_all_categories)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to parse YAML: {exc}")
+
+    # Determine which categories to search
+    requested = [c.strip() for c in categories.split(",") if c.strip()]
+    cats_to_search = requested if requested else list(all_categories.keys())
+
+    results: list[ModelEntry] = []
+
+    async def _scan_cat(cat: str) -> list[ModelEntry]:
+        cached = _cache_get(comfy_ui_path, cat)
+        if cached is not None:
+            return cached
+        paths = all_categories.get(cat, [])
+        if not paths:
+            return []
+        models = await asyncio.to_thread(_scan_category_paths, cat, paths)
+        _cache_set(comfy_ui_path, cat, models)
+        return models
+
+    # Scan all target categories concurrently
+    scanned = await asyncio.gather(*[_scan_cat(c) for c in cats_to_search])
+    for cat_models in scanned:
+        for m in cat_models:
+            if _matches_query(m, q):
+                results.append(m)
+                if len(results) >= limit:
+                    break
+        if len(results) >= limit:
+            break
+
+    return SearchResponse(success=True, models=results)

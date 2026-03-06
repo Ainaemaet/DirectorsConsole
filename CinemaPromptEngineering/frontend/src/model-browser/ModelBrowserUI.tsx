@@ -1,14 +1,21 @@
 /**
  * ModelBrowserUI — Top-level model browser tab.
  *
- * Reads ComfyUI model directories from extra_model_paths.yaml (via Orchestrator),
- * displays a searchable/sortable grid of model cards, and a detail panel on selection.
+ * Two views:
+ *   Library  — browse/search locally installed models by category
+ *   Discover — search Civitai / HuggingFace and download models
+ *
+ * NSFW modes: hidden (filter .nsfw folders) | blurred (blur + icon) | visible
+ * Download drawer: slide-up panel with SSE progress for active downloads.
  */
 
 import { useEffect, useMemo, useCallback } from 'react';
 import { useModelBrowserStore } from './store/model-browser-store';
+import { isModelNsfw } from './services/model-browser-service';
 import { ModelCard } from './components/ModelCard';
 import { ModelDetailPanel } from './components/ModelDetailPanel';
+import { DiscoverPanel } from './components/DiscoverPanel';
+import { DownloadDrawer } from './components/DownloadDrawer';
 import { MODEL_NODE_MAP } from '../studio/services/studio-bridge';
 import './ModelBrowserUI.css';
 
@@ -31,14 +38,22 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     sortBy,
     sortDir,
     error,
+    activeView,
+    nsfwMode,
+    downloadTasks,
+    downloadDrawerOpen,
     setSelectedCategory,
     setSelectedModel,
     setSearchQuery,
     setSortBy,
     setSortDir,
     clearError,
+    setActiveView,
+    setNsfwMode,
+    setDownloadDrawerOpen,
     loadConfig,
     loadModels,
+    syncDownloadTasks,
   } = useModelBrowserStore();
 
   // Load category config when tab becomes active or settings change
@@ -54,12 +69,23 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     loadModels(orchestratorUrl, comfyUiPath, selectedCategory);
   }, [isActive, orchestratorUrl, comfyUiPath, selectedCategory, loadedCategory, loadModels]);
 
+  // Sync download tasks when tab becomes active
+  useEffect(() => {
+    if (!isActive || !orchestratorUrl) return;
+    syncDownloadTasks(orchestratorUrl);
+  }, [isActive, orchestratorUrl, syncDownloadTasks]);
+
   const categoryNames = Object.keys(categories).sort();
   const totalCount = models.length;
 
-  // Filtered + sorted models (client-side, fast)
+  // Filtered + sorted models (client-side)
   const displayModels = useMemo(() => {
     let list = models;
+
+    // Apply NSFW filter (hidden mode removes .nsfw folder models)
+    if (nsfwMode === 'hidden') {
+      list = list.filter((m) => !isModelNsfw(m));
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -68,6 +94,7 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
           m.name.toLowerCase().includes(q) ||
           m.filename.toLowerCase().includes(q) ||
           m.base_model.toLowerCase().includes(q) ||
+          m.subfolder.toLowerCase().includes(q) ||
           m.tags.some((t) => t.toLowerCase().includes(q)) ||
           m.trained_words.some((w) => w.toLowerCase().includes(q))
       );
@@ -82,7 +109,7 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     });
 
     return list;
-  }, [models, searchQuery, sortBy, sortDir]);
+  }, [models, searchQuery, sortBy, sortDir, nsfwMode]);
 
   const handleCategoryClick = useCallback(
     (cat: string) => {
@@ -95,7 +122,6 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
 
   const handleRefresh = useCallback(() => {
     if (!orchestratorUrl || !comfyUiPath) return;
-    // Force reload by resetting loadedCategory
     useModelBrowserStore.setState({ loadedCategory: '__none__', models: [], selectedModel: null });
     loadConfig(orchestratorUrl, comfyUiPath);
     if (selectedCategory) {
@@ -122,6 +148,21 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     window.dispatchEvent(new CustomEvent('app:navigate-tab', { detail: 'studio' }));
   }, [selectedModel]);
 
+  const activeDownloads = downloadTasks.filter(
+    (t) => t.status === 'queued' || t.status === 'downloading'
+  ).length;
+
+  const cycleNsfwMode = () => {
+    const next = nsfwMode === 'hidden' ? 'blurred' : nsfwMode === 'blurred' ? 'visible' : 'hidden';
+    setNsfwMode(next);
+  };
+
+  const nsfwIcon = nsfwMode === 'hidden' ? '🚫' : nsfwMode === 'blurred' ? '👁️' : '👁️‍🗨️';
+  const nsfwTitle =
+    nsfwMode === 'hidden' ? 'NSFW: Hidden (click to blur)' :
+    nsfwMode === 'blurred' ? 'NSFW: Blurred (click to show)' :
+    'NSFW: Visible (click to hide)';
+
   // ── Empty state: ComfyUI path not set ──────────────────────────────────
   if (!comfyUiPath) {
     return (
@@ -145,59 +186,99 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
     <div className="mb-root">
       {/* ── Toolbar ───────────────────────────────────────────────────── */}
       <div className="mb-toolbar">
-        <input
-          className="mb-toolbar__search"
-          type="text"
-          placeholder="Search models…"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-
-        <div className="mb-toolbar__sort">
-          <select
-            className="mb-toolbar__sort-select"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'name' | 'size' | 'modified')}
-          >
-            <option value="name">Name</option>
-            <option value="size">Size</option>
-            <option value="modified">Modified</option>
-          </select>
+        {/* View toggle */}
+        <div className="mb-toolbar__view-tabs">
           <button
-            className="mb-toolbar__sort-dir"
-            onClick={toggleSortDir}
-            title={`Sort ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
+            className={`mb-toolbar__view-tab ${activeView === 'library' ? 'mb-toolbar__view-tab--active' : ''}`}
+            onClick={() => setActiveView('library')}
           >
-            {sortDir === 'asc' ? '↑' : '↓'}
+            Library
+          </button>
+          <button
+            className={`mb-toolbar__view-tab ${activeView === 'discover' ? 'mb-toolbar__view-tab--active' : ''}`}
+            onClick={() => setActiveView('discover')}
+          >
+            Discover
           </button>
         </div>
 
+        {activeView === 'library' && (
+          <>
+            <input
+              className="mb-toolbar__search"
+              type="text"
+              placeholder="Search models…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+
+            <div className="mb-toolbar__sort">
+              <select
+                className="mb-toolbar__sort-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'name' | 'size' | 'modified')}
+              >
+                <option value="name">Name</option>
+                <option value="size">Size</option>
+                <option value="modified">Modified</option>
+              </select>
+              <button
+                className="mb-toolbar__sort-dir"
+                onClick={toggleSortDir}
+                title={`Sort ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
+              >
+                {sortDir === 'asc' ? '↑' : '↓'}
+              </button>
+            </div>
+
+            <button
+              className="mb-toolbar__refresh"
+              onClick={handleRefresh}
+              title="Refresh model list"
+              disabled={isLoadingConfig || isLoadingModels}
+            >
+              ↻
+            </button>
+
+            {selectedModel && MODEL_NODE_MAP[selectedModel.category] && (
+              <button
+                className="mb-toolbar__btn"
+                onClick={handleOpenInStudio}
+                title={`Send "${selectedModel.name}" to Studio tab`}
+              >
+                Open in Studio ↗
+              </button>
+            )}
+
+            {selectedCategory && !isLoadingModels && (
+              <span className="mb-toolbar__count">
+                {displayModels.length}
+                {searchQuery ? ` / ${totalCount}` : ''}
+              </span>
+            )}
+          </>
+        )}
+
+        <div className="mb-toolbar__spacer" />
+
+        {/* NSFW toggle */}
         <button
-          className="mb-toolbar__refresh"
-          onClick={handleRefresh}
-          title="Refresh model list"
-          disabled={isLoadingConfig || isLoadingModels}
+          className="mb-toolbar__nsfw"
+          onClick={cycleNsfwMode}
+          title={nsfwTitle}
+          data-mode={nsfwMode}
         >
-          ↻
+          {nsfwIcon}
         </button>
 
-        {selectedModel && MODEL_NODE_MAP[selectedModel.category] && (
-          <button
-            className="mb-toolbar__refresh"
-            onClick={handleOpenInStudio}
-            title={`Send "${selectedModel.name}" to Studio tab`}
-            style={{ padding: '0 10px', fontSize: '12px' }}
-          >
-            Open in Studio ↗
-          </button>
-        )}
-
-        {selectedCategory && !isLoadingModels && (
-          <span className="mb-toolbar__count">
-            {displayModels.length}
-            {searchQuery ? ` / ${totalCount}` : ''}
-          </span>
-        )}
+        {/* Download queue button */}
+        <button
+          className={`mb-toolbar__downloads ${activeDownloads > 0 ? 'mb-toolbar__downloads--active' : ''}`}
+          onClick={() => setDownloadDrawerOpen(!downloadDrawerOpen)}
+          title="Download queue"
+        >
+          ⬇{activeDownloads > 0 ? ` ${activeDownloads}` : ''}
+        </button>
       </div>
 
       {/* ── Error banner ───────────────────────────────────────────────── */}
@@ -208,73 +289,92 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
         </div>
       )}
 
-      <div className="mb-body">
-        {/* ── Sidebar: categories ──────────────────────────────────────── */}
-        <aside className="mb-sidebar">
-          {isLoadingConfig && (
-            <div className="mb-sidebar__loading">Loading categories…</div>
-          )}
-          {!isLoadingConfig && categoryNames.length === 0 && !error && (
-            <div className="mb-sidebar__empty">No categories found</div>
-          )}
-          {categoryNames.map((cat) => (
-            <button
-              key={cat}
-              className={`mb-sidebar__cat ${selectedCategory === cat ? 'mb-sidebar__cat--active' : ''}`}
-              onClick={() => handleCategoryClick(cat)}
-            >
-              {cat}
-            </button>
-          ))}
-        </aside>
+      {/* ── Discover view ──────────────────────────────────────────────── */}
+      {activeView === 'discover' && (
+        <DiscoverPanel
+          orchestratorUrl={orchestratorUrl}
+          categories={categories}
+        />
+      )}
 
-        {/* ── Main: grid ───────────────────────────────────────────────── */}
-        <main className="mb-main">
-          {!selectedCategory && !isLoadingConfig && categoryNames.length > 0 && (
-            <div className="mb-main__prompt">
-              Select a category from the sidebar to browse models.
-            </div>
-          )}
+      {/* ── Library view ───────────────────────────────────────────────── */}
+      {activeView === 'library' && (
+        <div className="mb-body">
+          {/* Sidebar: categories */}
+          <aside className="mb-sidebar">
+            {isLoadingConfig && (
+              <div className="mb-sidebar__loading">Loading categories…</div>
+            )}
+            {!isLoadingConfig && categoryNames.length === 0 && !error && (
+              <div className="mb-sidebar__empty">No categories found</div>
+            )}
+            {categoryNames.map((cat) => (
+              <button
+                key={cat}
+                className={`mb-sidebar__cat ${selectedCategory === cat ? 'mb-sidebar__cat--active' : ''}`}
+                onClick={() => handleCategoryClick(cat)}
+              >
+                {cat}
+              </button>
+            ))}
+          </aside>
 
-          {isLoadingModels && (
-            <div className="mb-main__loading">
-              <div className="mb-spinner" />
-              <span>Scanning models…</span>
-            </div>
-          )}
+          {/* Main: grid */}
+          <main className="mb-main">
+            {!selectedCategory && !isLoadingConfig && categoryNames.length > 0 && (
+              <div className="mb-main__prompt">
+                Select a category from the sidebar to browse models.
+              </div>
+            )}
 
-          {!isLoadingModels && selectedCategory && displayModels.length === 0 && !error && (
-            <div className="mb-main__empty">
-              {searchQuery ? 'No models match your search.' : 'No models found in this category.'}
-            </div>
-          )}
+            {isLoadingModels && (
+              <div className="mb-main__loading">
+                <div className="mb-spinner" />
+                <span>Scanning models…</span>
+              </div>
+            )}
 
-          {!isLoadingModels && displayModels.length > 0 && (
-            <div className="mb-grid">
-              {displayModels.map((model) => (
-                <ModelCard
-                  key={model.path}
-                  model={model}
-                  orchestratorUrl={orchestratorUrl}
-                  isSelected={selectedModel?.path === model.path}
-                  onClick={() =>
-                    setSelectedModel(selectedModel?.path === model.path ? null : model)
-                  }
-                />
-              ))}
-            </div>
-          )}
-        </main>
+            {!isLoadingModels && selectedCategory && displayModels.length === 0 && !error && (
+              <div className="mb-main__empty">
+                {searchQuery ? 'No models match your search.' : 'No models found in this category.'}
+              </div>
+            )}
 
-        {/* ── Detail panel ─────────────────────────────────────────────── */}
-        {selectedModel && (
-          <ModelDetailPanel
-            model={selectedModel}
-            orchestratorUrl={orchestratorUrl}
-            onClose={() => setSelectedModel(null)}
-          />
-        )}
-      </div>
+            {!isLoadingModels && displayModels.length > 0 && (
+              <div className="mb-grid">
+                {displayModels.map((model) => (
+                  <ModelCard
+                    key={model.path}
+                    model={model}
+                    orchestratorUrl={orchestratorUrl}
+                    isSelected={selectedModel?.path === model.path}
+                    nsfwMode={nsfwMode}
+                    onClick={() =>
+                      setSelectedModel(selectedModel?.path === model.path ? null : model)
+                    }
+                  />
+                ))}
+              </div>
+            )}
+          </main>
+
+          {/* Detail panel */}
+          {selectedModel && (
+            <ModelDetailPanel
+              model={selectedModel}
+              orchestratorUrl={orchestratorUrl}
+              onClose={() => setSelectedModel(null)}
+            />
+          )}
+        </div>
+      )}
+
+      {/* ── Download drawer ────────────────────────────────────────────── */}
+      <DownloadDrawer
+        orchestratorUrl={orchestratorUrl}
+        open={downloadDrawerOpen}
+        onClose={() => setDownloadDrawerOpen(false)}
+      />
     </div>
   );
 }
