@@ -50,6 +50,7 @@ export function StudioUI({ orchestratorUrl, comfyUiPath, isActive }: StudioUIPro
   const [loadingSidebar, setLoadingSidebar] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const pollCancelRef = useRef(false);
 
   // ── Persist URL ────────────────────────────────────────────────
   const applyUrl = useCallback((url: string) => {
@@ -60,26 +61,30 @@ export function StudioUI({ orchestratorUrl, comfyUiPath, isActive }: StudioUIPro
     setBridgeStatus('disconnected');
   }, []);
 
-  // ── Bridge event: graph-ready ──────────────────────────────────
+  // ── Flush pending model once bridge is ready ───────────────────
+  const flushPending = useCallback(() => {
+    const pending = pendingModelRef.current;
+    if (pending) {
+      pendingModelRef.current = null;
+      studioBridge
+        .send('add-node', {
+          nodeType: pending.nodeType,
+          inputName: pending.inputName,
+          modelFilename: pending.filename,
+        })
+        .catch(console.error);
+    }
+  }, []);
+
+  // ── Bridge event: graph-ready (handles ComfyUI-side reloads) ──
   useEffect(() => {
     function onReady() {
       setBridgeStatus('ready');
-      // Flush pending model if queued before bridge was ready
-      const pending = pendingModelRef.current;
-      if (pending) {
-        pendingModelRef.current = null;
-        studioBridge
-          .send('add-node', {
-            nodeType: pending.nodeType,
-            inputName: pending.inputName,
-            modelFilename: pending.filename,
-          })
-          .catch(console.error);
-      }
+      flushPending();
     }
     studioBridge.on('graph-ready', onReady);
     return () => studioBridge.off('graph-ready', onReady);
-  }, []);
+  }, [flushPending]);
 
   // ── Cross-tab: studio:add-model ────────────────────────────────
   useEffect(() => {
@@ -129,16 +134,50 @@ export function StudioUI({ orchestratorUrl, comfyUiPath, isActive }: StudioUIPro
     );
   }, [sidebarModels, sidebarSearch]);
 
-  // ── Iframe load handler ────────────────────────────────────────
+  // ── Iframe load handler — connect then poll for bridge ─────────
   const handleIframeLoad = useCallback(() => {
     if (!iframeRef.current) return;
     setBridgeStatus('connecting');
     studioBridge.connect(iframeRef.current, comfyUrl);
-  }, [comfyUrl]);
 
-  // ── Disconnect bridge when URL changes or component unmounts ───
+    // Poll for bridge readiness. The bridge sends graph-ready during ComfyUI's
+    // startup, which fires BEFORE DC's onLoad listener is registered — so the
+    // one-shot event is lost. We probe with ping until the bridge responds.
+    pollCancelRef.current = false;
+    const MAX_ATTEMPTS = 40; // ~60 seconds total (1.5s gap)
+    const GAP_MS = 1500;
+
+    async function poll() {
+      for (let i = 0; i < MAX_ATTEMPTS; i++) {
+        if (pollCancelRef.current) return;
+        await new Promise<void>((r) => setTimeout(r, GAP_MS));
+        if (pollCancelRef.current) return;
+        try {
+          await studioBridge.send('ping', {}, 2000);
+          if (!pollCancelRef.current) {
+            setBridgeStatus('ready');
+            flushPending();
+          }
+          return;
+        } catch {
+          // not ready yet — keep trying
+        }
+      }
+      // Timed out — ComfyCinemaPrompting likely not installed
+      if (!pollCancelRef.current) {
+        setBridgeStatus('disconnected');
+      }
+    }
+
+    poll();
+  }, [comfyUrl, flushPending]);
+
+  // ── Cancel poll + disconnect bridge when URL changes/unmounts ──
   useEffect(() => {
-    return () => { studioBridge.disconnect(); };
+    return () => {
+      pollCancelRef.current = true;
+      studioBridge.disconnect();
+    };
   }, [comfyUrl]);
 
   // ── Add node action ────────────────────────────────────────────
@@ -192,7 +231,7 @@ export function StudioUI({ orchestratorUrl, comfyUiPath, isActive }: StudioUIPro
 
   // ── Status display ─────────────────────────────────────────────
   const statusLabel = {
-    disconnected: 'Bridge offline',
+    disconnected: 'Bridge offline (ComfyCinemaPrompting not detected)',
     connecting:   'Connecting…',
     ready:        'Bridge ready',
   }[bridgeStatus];

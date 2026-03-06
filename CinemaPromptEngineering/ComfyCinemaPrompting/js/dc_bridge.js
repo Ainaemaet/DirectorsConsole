@@ -228,6 +228,11 @@ if (isEmbedded) {
               break;
             }
 
+            case 'ping': {
+              sendResponse(messageId, { version: '1.0', ready: true }, null);
+              break;
+            }
+
             default:
               sendResponse(messageId, null, `Unknown command: ${type}`);
           }
