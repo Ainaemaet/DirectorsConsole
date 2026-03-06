@@ -7,11 +7,14 @@ should use when enhancing prompts for optimal results.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List
 
 
 logger = logging.getLogger(__name__)
+
+_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
 # =============================================================================
@@ -360,3 +363,131 @@ CONSTRAINTS (MUST FOLLOW):
 - Follow the system prompt's output format and structure for the target model.
 
 Output ONLY the final prompt - no explanations, no duplicates, no examples."""
+
+
+# =============================================================================
+# PROMPT EDITOR HELPERS (CRUD)
+# =============================================================================
+
+
+def _resolve_prompt_path(prompt_id: str) -> Path:
+    """Return the filesystem path for a given prompt ID.
+
+    'general' maps to system_prompts/general.md; all other IDs map to
+    system_prompts/model_prompts/{id}.md.
+    """
+    if prompt_id == "general":
+        return GENERAL_PROMPT_PATH
+    return MODEL_PROMPTS_DIR / f"{prompt_id}.md"
+
+
+def _validate_prompt_id(prompt_id: str) -> None:
+    """Raise ValueError if prompt_id contains unsafe characters."""
+    if not _SAFE_ID_RE.match(prompt_id):
+        raise ValueError(f"Invalid prompt ID '{prompt_id}': only letters, digits, '.', '_', '-' are allowed")
+
+
+def list_system_prompts() -> List[Dict]:
+    """Return metadata for all system prompts (general + model-specific).
+
+    Returns:
+        A list of dicts with keys: id, name, type ('general' or 'model'), exists.
+    """
+    results: List[Dict] = []
+
+    # General prompt
+    results.append({
+        "id": "general",
+        "name": "General (Base Prompt)",
+        "type": "general",
+        "exists": GENERAL_PROMPT_PATH.exists(),
+    })
+
+    # Model prompts — include registered models first (preserves known ordering)
+    seen: set[str] = set()
+    for model in TARGET_MODELS:
+        mid = model["id"]
+        if mid == "generic":
+            continue
+        path = MODEL_PROMPTS_DIR / f"{mid}.md"
+        results.append({
+            "id": mid,
+            "name": model["name"],
+            "type": "model",
+            "exists": path.exists(),
+        })
+        seen.add(mid)
+
+    # Also pick up any .md files that exist on disk but aren't in TARGET_MODELS
+    if MODEL_PROMPTS_DIR.exists():
+        for p in sorted(MODEL_PROMPTS_DIR.glob("*.md")):
+            mid = p.stem
+            if mid not in seen:
+                results.append({
+                    "id": mid,
+                    "name": mid.replace("_", " ").replace("-", " ").title(),
+                    "type": "model",
+                    "exists": True,
+                })
+
+    return results
+
+
+def write_system_prompt(prompt_id: str, content: str) -> None:
+    """Overwrite the content of an existing prompt file.
+
+    Args:
+        prompt_id: The prompt identifier ('general' or a model slug).
+        content: The new markdown content to write.
+
+    Raises:
+        ValueError: If prompt_id is unsafe.
+        FileNotFoundError: If the prompt file does not exist yet (use create_model_prompt).
+    """
+    _validate_prompt_id(prompt_id)
+    path = _resolve_prompt_path(prompt_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Prompt '{prompt_id}' does not exist. Use create to add it.")
+    path.write_text(content, encoding="utf-8")
+    logger.info("System prompt updated: %s", path)
+
+
+def create_model_prompt(prompt_id: str, content: str) -> None:
+    """Create a new model-specific prompt file.
+
+    Args:
+        prompt_id: The new prompt's slug (cannot be 'general').
+        content: Initial markdown content.
+
+    Raises:
+        ValueError: If prompt_id is unsafe or already exists.
+    """
+    if prompt_id == "general":
+        raise ValueError("Cannot create a prompt with the reserved ID 'general'.")
+    _validate_prompt_id(prompt_id)
+    path = MODEL_PROMPTS_DIR / f"{prompt_id}.md"
+    if path.exists():
+        raise ValueError(f"Prompt '{prompt_id}' already exists.")
+    MODEL_PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    logger.info("System prompt created: %s", path)
+
+
+def delete_model_prompt(prompt_id: str) -> None:
+    """Delete a model-specific prompt file.
+
+    Args:
+        prompt_id: The prompt slug to delete (cannot be 'general').
+
+    Raises:
+        ValueError: If prompt_id is 'general' or unsafe.
+        FileNotFoundError: If the prompt file does not exist.
+    """
+    if prompt_id == "general":
+        raise ValueError("The general prompt cannot be deleted.")
+    _validate_prompt_id(prompt_id)
+    path = MODEL_PROMPTS_DIR / f"{prompt_id}.md"
+    if not path.exists():
+        raise FileNotFoundError(f"Prompt '{prompt_id}' does not exist.")
+    path.unlink()
+    logger.info("System prompt deleted: %s", path)

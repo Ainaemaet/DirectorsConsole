@@ -3,7 +3,7 @@
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -1978,6 +1978,10 @@ from api.providers.system_prompts import (
     get_system_prompt,
     build_enhancement_prompt,
     is_video_model,
+    list_system_prompts,
+    write_system_prompt,
+    create_model_prompt,
+    delete_model_prompt,
 )
 
 
@@ -2245,6 +2249,90 @@ async def enhance_prompt(request: EnhancePromptRequest) -> EnhancePromptResponse
             success=False,
             error=f"Enhancement failed: {str(e)}",
         )
+
+
+# =============================================================================
+# SYSTEM PROMPT EDITOR ENDPOINTS
+# =============================================================================
+
+
+class SystemPromptListItem(BaseModel):
+    """Metadata for a single system prompt file."""
+    id: str
+    name: str
+    type: Literal["general", "model"]
+    exists: bool
+
+
+class SystemPromptDetail(BaseModel):
+    """Full content of a system prompt."""
+    id: str
+    content: str
+
+
+class SystemPromptWriteRequest(BaseModel):
+    """Request body for saving a prompt."""
+    content: str
+
+
+class SystemPromptCreateRequest(BaseModel):
+    """Request body for creating a new model prompt."""
+    id: str
+    content: str
+
+
+@app.get("/system-prompts")
+async def get_system_prompts_list() -> list[SystemPromptListItem]:
+    """List all system prompts (general + model-specific)."""
+    return [SystemPromptListItem(**item) for item in list_system_prompts()]
+
+
+@app.get("/system-prompts/{prompt_id}")
+async def get_system_prompt_detail(prompt_id: str) -> SystemPromptDetail:
+    """Get the content of a system prompt by ID."""
+    from api.providers.system_prompts import _validate_prompt_id, _resolve_prompt_path
+    try:
+        _validate_prompt_id(prompt_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    path = _resolve_prompt_path(prompt_id)
+    if not path.exists():
+        return SystemPromptDetail(id=prompt_id, content="")
+    return SystemPromptDetail(id=prompt_id, content=path.read_text(encoding="utf-8"))
+
+
+@app.put("/system-prompts/{prompt_id}")
+async def save_system_prompt(prompt_id: str, request: SystemPromptWriteRequest) -> dict:
+    """Save (overwrite) a system prompt."""
+    try:
+        write_system_prompt(prompt_id, request.content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True}
+
+
+@app.post("/system-prompts")
+async def create_system_prompt(request: SystemPromptCreateRequest) -> dict:
+    """Create a new model-specific system prompt."""
+    try:
+        create_model_prompt(request.id, request.content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "id": request.id}
+
+
+@app.delete("/system-prompts/{prompt_id}")
+async def delete_system_prompt(prompt_id: str) -> dict:
+    """Delete a model-specific system prompt."""
+    try:
+        delete_model_prompt(prompt_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True}
 
 
 # =============================================================================

@@ -46,6 +46,7 @@ export default defineConfig({
       '/enhance-prompt': { target: 'http://localhost:9800', changeOrigin: true },
       '/llm': { target: 'http://localhost:9800', changeOrigin: true },
       '/target-models': { target: 'http://localhost:9800', changeOrigin: true },
+      '/system-prompts': { target: 'http://localhost:9800', changeOrigin: true },
     },
   },
 });

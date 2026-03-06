@@ -3,6 +3,7 @@ import { CinemaPromptEngineering } from './CinemaPromptEngineering';
 import { StoryboardUI } from './StoryboardUI';
 import { GalleryUI } from './gallery';
 import { ModelBrowserUI } from './model-browser';
+import { PromptEditorUI } from './prompt-editor';
 import OAuthCallback from '@/components/OAuthCallback';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './App.css';
@@ -12,7 +13,7 @@ const isOAuthCallback = window.location.pathname.includes('/oauth/callback') ||
                          window.location.search.includes('code=') ||
                          window.location.search.includes('error=');
 
-type TabId = 'cinema' | 'storyboard' | 'gallery' | 'models';
+type TabId = 'cinema' | 'storyboard' | 'gallery' | 'models' | 'prompts';
 
 interface Tab {
   id: TabId;
@@ -25,6 +26,7 @@ const TABS: Tab[] = [
   { id: 'storyboard', label: 'Storyboard', icon: '📋' },
   { id: 'gallery', label: 'Gallery', icon: '🖼️' },
   { id: 'models', label: 'Models', icon: '🧠' },
+  { id: 'prompts', label: 'Prompt Editor', icon: '✏️' },
 ];
 
 function DirectorsConsole() {
@@ -134,6 +136,11 @@ function DirectorsConsole() {
         <div style={{ display: activeTab === 'models' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
           <ErrorBoundary>
             <ModelBrowserUI orchestratorUrl={galleryOrchestratorUrl} comfyUiPath={modelBrowserComfyUiPath} isActive={activeTab === 'models'} />
+          </ErrorBoundary>
+        </div>
+        <div style={{ display: activeTab === 'prompts' ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
+          <ErrorBoundary>
+            <PromptEditorUI isActive={activeTab === 'prompts'} />
           </ErrorBoundary>
         </div>
       </main>
