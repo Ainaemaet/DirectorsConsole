@@ -43,6 +43,7 @@ export interface ProjectSettings {
   namingTemplate: string; // e.g., "{project}_{panel}_{version}" or "{shot}_{take}_{timestamp}"
   autoSave: boolean;
   orchestratorUrl: string; // URL to Orchestrator API (e.g., "http://localhost:9820")
+  bypassGroupApplyMode?: 'replace' | 'merge'; // default: 'replace'
   created: Date;
   lastModified: Date;
 }
@@ -144,6 +145,7 @@ const DEFAULT_PROJECT: ProjectSettings = {
   namingTemplate: '{project}_Panel{panel}_{version}',
   autoSave: false,
   orchestratorUrl: getDefaultOrchestratorUrl(),
+  bypassGroupApplyMode: 'replace',
   created: new Date(),
   lastModified: new Date(),
 };
