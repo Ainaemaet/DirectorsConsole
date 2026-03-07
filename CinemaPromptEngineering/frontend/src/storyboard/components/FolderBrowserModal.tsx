@@ -1,15 +1,25 @@
 /**
- * FolderBrowserModal - Browse and select folders via Orchestrator API
+ * FolderBrowserModal - Browse and select folders via Orchestrator API.
+ *
+ * Left sidebar shows pinned quick-access folders (global, persisted on server).
+ * Main area shows folder listing with navigate/back/path-input controls.
+ * Users can pin the current folder (★) and unpin from the sidebar (×).
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Folder, FolderOpen, HardDrive, ChevronLeft, Check, X, RefreshCw } from 'lucide-react';
+import { Folder, FolderOpen, HardDrive, ChevronLeft, Check, X, RefreshCw, Star } from 'lucide-react';
 import './FolderBrowserModal.css';
 
 interface FolderItem {
   name: string;
   path: string;
   type: 'drive' | 'folder';
+}
+
+interface QuickPin {
+  id: string;
+  path: string;
+  label: string;
 }
 
 interface FolderBrowserModalProps {
@@ -36,6 +46,7 @@ export function FolderBrowserModal({
   const [error, setError] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState('');
   const [showNewFolder, setShowNewFolder] = useState(false);
+  const [pins, setPins] = useState<QuickPin[]>([]);
 
   const loadFolder = useCallback(async (path: string) => {
     if (!orchestratorUrl) {
@@ -72,17 +83,48 @@ export function FolderBrowserModal({
     }
   }, [orchestratorUrl]);
 
+  const loadPins = useCallback(async () => {
+    if (!orchestratorUrl) return;
+    try {
+      const r = await fetch(`${orchestratorUrl}/api/quick-folders`);
+      if (r.ok) {
+        const data = await r.json();
+        setPins(data.pins ?? []);
+      }
+    } catch { /* ignore */ }
+  }, [orchestratorUrl]);
+
   useEffect(() => {
     if (isOpen) {
       loadFolder(initialPath);
+      loadPins();
     }
-  }, [isOpen, initialPath, loadFolder]);
+  }, [isOpen, initialPath, loadFolder, loadPins]);
 
   const handleSelect = () => {
     if (currentPath) {
       onSelect(currentPath);
       onClose();
     }
+  };
+
+  const handlePinCurrent = async () => {
+    if (!currentPath) return;
+    try {
+      const r = await fetch(`${orchestratorUrl}/api/quick-folders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentPath }),
+      });
+      if (r.ok) await loadPins();
+    } catch { /* ignore */ }
+  };
+
+  const handleUnpin = async (pinId: string) => {
+    try {
+      await fetch(`${orchestratorUrl}/api/quick-folders/${pinId}`, { method: 'DELETE' });
+      setPins((prev) => prev.filter((p) => p.id !== pinId));
+    } catch { /* ignore */ }
   };
 
   const handleCreateFolder = async () => {
@@ -99,24 +141,23 @@ export function FolderBrowserModal({
       });
 
       const result = await response.json();
-      
+
       if (!result.success) {
         setError(result.message);
         return;
       }
 
-      // Folder created successfully - navigate to it
       setShowNewFolder(false);
       setNewFolderName('');
       const newPath = result.created_path.replace(/\//g, '\\');
       setCurrentPath(newPath);
-      
-      // Refresh the folder list
       await loadFolder(newPath);
     } catch (err) {
       setError(`Failed to create folder: ${err}`);
     }
   };
+
+  const isPinned = pins.some((p) => p.path === currentPath);
 
   if (!isOpen) return null;
 
@@ -148,34 +189,69 @@ export function FolderBrowserModal({
           <button onClick={() => loadFolder(currentPath)} disabled={loading} title="Refresh">
             <RefreshCw size={18} className={loading ? 'spinning' : ''} />
           </button>
+          <button
+            onClick={handlePinCurrent}
+            disabled={!currentPath || isPinned}
+            title={isPinned ? 'Already pinned' : 'Pin this folder'}
+            className={isPinned ? 'fb-pin-btn fb-pin-btn--active' : 'fb-pin-btn'}
+          >
+            <Star size={14} />
+          </button>
         </div>
 
-        <div className="folder-browser-content">
-          {error && <div className="folder-error">{error}</div>}
-          
-          {loading ? (
-            <div className="folder-loading">Loading...</div>
-          ) : (
-            <div className="folder-list">
-              {items.length === 0 && !error && (
-                <div className="folder-empty">No folders found</div>
-              )}
-              {items.map((item) => (
+        <div className="folder-browser-body">
+          {/* Quick pins sidebar */}
+          {pins.length > 0 && (
+            <div className="folder-browser-pins">
+              <div className="folder-browser-pins__header">Quick Access</div>
+              {pins.map((pin) => (
                 <div
-                  key={item.path}
-                  className="folder-item"
-                  onDoubleClick={() => loadFolder(item.path)}
+                  key={pin.id}
+                  className={`folder-browser-pins__item${currentPath === pin.path ? ' folder-browser-pins__item--active' : ''}`}
+                  onClick={() => loadFolder(pin.path)}
+                  title={pin.path}
                 >
-                  {item.type === 'drive' ? (
-                    <HardDrive size={18} />
-                  ) : (
-                    <Folder size={18} />
-                  )}
-                  <span>{item.name}</span>
+                  <Star size={12} className="folder-browser-pins__icon" />
+                  <span className="folder-browser-pins__label">{pin.label}</span>
+                  <button
+                    className="folder-browser-pins__remove"
+                    onClick={(e) => { e.stopPropagation(); handleUnpin(pin.id); }}
+                    title="Remove pin"
+                  >
+                    ×
+                  </button>
                 </div>
               ))}
             </div>
           )}
+
+          <div className="folder-browser-content">
+            {error && <div className="folder-error">{error}</div>}
+
+            {loading ? (
+              <div className="folder-loading">Loading...</div>
+            ) : (
+              <div className="folder-list">
+                {items.length === 0 && !error && (
+                  <div className="folder-empty">No folders found</div>
+                )}
+                {items.map((item) => (
+                  <div
+                    key={item.path}
+                    className="folder-item"
+                    onDoubleClick={() => loadFolder(item.path)}
+                  >
+                    {item.type === 'drive' ? (
+                      <HardDrive size={18} />
+                    ) : (
+                      <Folder size={18} />
+                    )}
+                    <span>{item.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {showNewFolder && (

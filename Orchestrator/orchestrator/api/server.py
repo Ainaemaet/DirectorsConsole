@@ -2044,6 +2044,68 @@ async def create_folder(request: CreateFolderRequest):
 
 
 # ============================================================================
+# Quick Folders — pinned directory shortcuts for the folder browser
+# ============================================================================
+
+_QUICK_FOLDERS_FILE = Path(__file__).parent.parent / "data" / "quick_folders.json"
+
+
+def _load_quick_folders() -> list[dict]:
+    try:
+        if _QUICK_FOLDERS_FILE.exists():
+            return json.loads(_QUICK_FOLDERS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return []
+
+
+def _save_quick_folders(pins: list[dict]) -> None:
+    _QUICK_FOLDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _QUICK_FOLDERS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(pins, indent=2), encoding="utf-8")
+    tmp.replace(_QUICK_FOLDERS_FILE)
+
+
+@app.get("/api/quick-folders")
+async def list_quick_folders() -> dict[str, Any]:
+    """Return all pinned quick-access folders."""
+    return {"pins": await asyncio.to_thread(_load_quick_folders)}
+
+
+class QuickFolderRequest(BaseModel):
+    path: str
+    label: str = ""
+
+
+@app.post("/api/quick-folders")
+async def add_quick_folder(req: QuickFolderRequest) -> dict[str, Any]:
+    """Pin a folder path. Returns the new pin with its generated id."""
+    def _add() -> dict:
+        pins = _load_quick_folders()
+        # De-duplicate by path
+        if any(p["path"] == req.path for p in pins):
+            match = next(p for p in pins if p["path"] == req.path)
+            return {"pin": match}
+        import uuid
+        pin = {"id": str(uuid.uuid4()), "path": req.path, "label": req.label or Path(req.path).name}
+        pins.append(pin)
+        _save_quick_folders(pins)
+        return {"pin": pin}
+    return await asyncio.to_thread(_add)
+
+
+@app.delete("/api/quick-folders/{pin_id}")
+async def remove_quick_folder(pin_id: str) -> dict[str, Any]:
+    """Remove a pinned folder by id."""
+    def _remove() -> dict:
+        pins = _load_quick_folders()
+        new_pins = [p for p in pins if p["id"] != pin_id]
+        _save_quick_folders(new_pins)
+        return {"removed": len(pins) != len(new_pins)}
+    return await asyncio.to_thread(_remove)
+
+
+# ============================================================================
 # Phase 1: Backend Endpoints for Project Save/Load Refactor
 # ============================================================================
 

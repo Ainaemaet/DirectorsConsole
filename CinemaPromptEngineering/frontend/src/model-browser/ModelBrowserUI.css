@@ -1861,6 +1861,28 @@
   box-sizing: border-box;
 }
 .disc-detail__input:focus { outline: none; border-color: var(--mb-accent); }
+
+.disc-subfolder-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.disc-subfolder-row .disc-detail__input {
+  flex: 1;
+  width: auto;
+}
+.disc-browse-btn {
+  flex-shrink: 0;
+  background: var(--mb-bg-tertiary);
+  border: var(--mb-border);
+  border-radius: var(--mb-radius);
+  color: var(--mb-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 3px 6px;
+  line-height: 1;
+}
+.disc-browse-btn:hover { border-color: var(--mb-accent); }
 .disc-detail__files { padding: 6px 12px; display: flex; flex-direction: column; gap: 4px; }
 .disc-detail__file { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .disc-detail__filename { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--mb-text); }

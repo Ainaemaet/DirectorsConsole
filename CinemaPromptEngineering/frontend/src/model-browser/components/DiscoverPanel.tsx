@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { FolderBrowserModal } from '../../storyboard/components/FolderBrowserModal';
 import {
   civitaiSearch,
   civitaiModelDetail,
@@ -209,6 +210,7 @@ export function DiscoverPanel({ orchestratorUrl, comfyUiPath, categories }: Disc
   const [dlSubfolder, setDlSubfolder] = useState('');
   const [dlBusy, setDlBusy] = useState(false);
   const [dlSubfolderOptions, setDlSubfolderOptions] = useState<string[]>([]);
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
 
   // Fetch existing subfolders when category changes
   useEffect(() => {
@@ -388,17 +390,26 @@ export function DiscoverPanel({ orchestratorUrl, comfyUiPath, categories }: Disc
               ))}
             </select>
           )}
-          <input
-            className="disc-detail__input"
-            type="text"
-            list="disc-subfolder-list"
-            placeholder="subfolder (optional)"
-            value={dlSubfolder}
-            onChange={(e) => setDlSubfolder(e.target.value)}
-          />
-          <datalist id="disc-subfolder-list">
-            {dlSubfolderOptions.map((s) => <option key={s} value={s} />)}
-          </datalist>
+          <div className="disc-subfolder-row">
+            <input
+              className="disc-detail__input"
+              type="text"
+              list="disc-subfolder-list"
+              placeholder="subfolder (optional)"
+              value={dlSubfolder}
+              onChange={(e) => setDlSubfolder(e.target.value)}
+            />
+            <datalist id="disc-subfolder-list">
+              {dlSubfolderOptions.map((s) => <option key={s} value={s} />)}
+            </datalist>
+            <button
+              className="disc-browse-btn"
+              title="Browse filesystem"
+              onClick={() => setShowFolderBrowser(true)}
+            >
+              📁
+            </button>
+          </div>
         </div>
         <div className="disc-detail__files">
           {files.map((f: { name: string; downloadUrl: string; sizeKB: number; primary?: boolean }, i: number) => (
@@ -451,17 +462,26 @@ export function DiscoverPanel({ orchestratorUrl, comfyUiPath, categories }: Disc
               ))}
             </select>
           )}
-          <input
-            className="disc-detail__input"
-            type="text"
-            list="disc-subfolder-list"
-            placeholder="subfolder (optional)"
-            value={dlSubfolder}
-            onChange={(e) => setDlSubfolder(e.target.value)}
-          />
-          <datalist id="disc-subfolder-list">
-            {dlSubfolderOptions.map((s) => <option key={s} value={s} />)}
-          </datalist>
+          <div className="disc-subfolder-row">
+            <input
+              className="disc-detail__input"
+              type="text"
+              list="disc-subfolder-list"
+              placeholder="subfolder (optional)"
+              value={dlSubfolder}
+              onChange={(e) => setDlSubfolder(e.target.value)}
+            />
+            <datalist id="disc-subfolder-list">
+              {dlSubfolderOptions.map((s) => <option key={s} value={s} />)}
+            </datalist>
+            <button
+              className="disc-browse-btn"
+              title="Browse filesystem"
+              onClick={() => setShowFolderBrowser(true)}
+            >
+              📁
+            </button>
+          </div>
         </div>
         <div className="disc-detail__files">
           {files.siblings.map((f, i) => (
@@ -643,6 +663,27 @@ export function DiscoverPanel({ orchestratorUrl, comfyUiPath, categories }: Disc
           )}
         </div>
       </div>
+
+      {/* ── Folder browser modal (for subfolder picker) ─────────── */}
+      <FolderBrowserModal
+        isOpen={showFolderBrowser}
+        onClose={() => setShowFolderBrowser(false)}
+        orchestratorUrl={orchestratorUrl}
+        title="Select Download Subfolder"
+        initialPath={(() => {
+          const basePaths = categories[dlCategory] ?? [];
+          return basePaths[dlPathIndex] ?? basePaths[0] ?? '';
+        })()}
+        onSelect={(selectedPath) => {
+          // Convert absolute path to relative subfolder by stripping the base
+          const basePaths = categories[dlCategory] ?? [];
+          const base = basePaths[dlPathIndex] ?? basePaths[0] ?? '';
+          const relative = base && selectedPath.startsWith(base)
+            ? selectedPath.slice(base.length).replace(/^[/\\]+/, '')
+            : selectedPath;
+          setDlSubfolder(relative);
+        }}
+      />
     </div>
   );
 }

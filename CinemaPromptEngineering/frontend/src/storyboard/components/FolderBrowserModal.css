@@ -124,6 +124,114 @@
   animation: spin 1s linear infinite;
 }
 
+/* ── Pin button in toolbar ─────────────────────────────────────── */
+
+.fb-pin-btn {
+  background: var(--sb-bg-elevated);
+  border: 1px solid var(--sb-border-strong);
+  border-radius: 4px;
+  color: var(--sb-text-muted);
+  cursor: pointer;
+  padding: 3px 6px;
+  display: flex;
+  align-items: center;
+  transition: all 0.15s ease;
+}
+.fb-pin-btn:hover:not(:disabled) {
+  color: #e3b341;
+  border-color: #e3b341;
+}
+.fb-pin-btn--active {
+  color: #e3b341;
+  border-color: #e3b341;
+}
+.fb-pin-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Body (pins + content side-by-side) ───────────────────────── */
+
+.folder-browser-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Quick pins sidebar ───────────────────────────────────────── */
+
+.folder-browser-pins {
+  width: 150px;
+  flex-shrink: 0;
+  background: var(--sb-bg-dark);
+  border-right: 1px solid var(--sb-border-medium);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.folder-browser-pins__header {
+  padding: 6px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--sb-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--sb-border-medium);
+  flex-shrink: 0;
+}
+
+.folder-browser-pins__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--sb-text-primary);
+  transition: background 0.1s;
+}
+.folder-browser-pins__item:hover {
+  background: var(--sb-bg-elevated);
+}
+.folder-browser-pins__item--active {
+  background: var(--sb-bg-elevated);
+  color: var(--sb-accent-primary);
+}
+
+.folder-browser-pins__icon {
+  flex-shrink: 0;
+  color: #e3b341;
+}
+
+.folder-browser-pins__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-browser-pins__remove {
+  background: none;
+  border: none;
+  color: var(--sb-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.folder-browser-pins__item:hover .folder-browser-pins__remove {
+  opacity: 1;
+}
+.folder-browser-pins__remove:hover {
+  color: var(--sb-status-error, #e57373);
+}
+
+/* ── Content pane ─────────────────────────────────────────────── */
+
 .folder-browser-content {
   flex: 1;
   overflow-y: auto;
