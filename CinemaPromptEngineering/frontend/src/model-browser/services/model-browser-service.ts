@@ -387,6 +387,77 @@ export async function fetchCivitaiBaseModels(orchestratorUrl: string): Promise<s
   return data.base_models ?? [];
 }
 
+// ── Bulk metadata scan ─────────────────────────────────────────────────────────
+
+export interface BulkScanEvent {
+  type: 'start' | 'progress' | 'done' | 'error';
+  total?: number;
+  index?: number;
+  path?: string;
+  found?: boolean;
+  model_name?: string;
+  error?: string;
+  not_found?: number;
+  errors?: number;
+  message?: string;
+}
+
+/**
+ * Opens an SSE stream for bulk Civitai metadata scan.
+ * Calls `onEvent` for each SSE message; returns a cleanup function to abort.
+ */
+export function startBulkScan(
+  orchestratorUrl: string,
+  payload: {
+    comfy_ui_path: string;
+    scope: 'all' | 'category' | 'folder';
+    category?: string;
+    folder_path?: string;
+    overwrite?: boolean;
+  },
+  onEvent: (evt: BulkScanEvent) => void
+): () => void {
+  const ctrl = new AbortController();
+
+  (async () => {
+    try {
+      const resp = await fetch(`${orchestratorUrl}/api/model-browser/bulk-scan-metadata`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok || !resp.body) {
+        onEvent({ type: 'error', message: `HTTP ${resp.status}` });
+        return;
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              onEvent(JSON.parse(line.slice(6)) as BulkScanEvent);
+            } catch { /* ignore */ }
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        onEvent({ type: 'error', message: String(e) });
+      }
+    }
+  })();
+
+  return () => ctrl.abort();
+}
+
 // ── NSFW helpers ──────────────────────────────────────────────────────────────
 
 /** Returns true if the model lives inside a .nsfw subfolder. */

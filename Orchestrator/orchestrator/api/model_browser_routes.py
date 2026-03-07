@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -959,3 +960,166 @@ async def fetch_civitai_metadata(req: FetchCivitaiMetaRequest) -> dict:
         "metadata": merged,
         "preview_path": preview_path,
     }
+
+
+# ---------------------------------------------------------------------------
+# Bulk metadata scan
+# ---------------------------------------------------------------------------
+
+
+class BulkScanRequest(BaseModel):
+    comfy_ui_path: str
+    scope: str = "all"          # "all" | "category" | "folder"
+    category: str = ""          # used when scope="category"
+    folder_path: str = ""       # used when scope="folder"
+    overwrite: bool = False
+
+
+@router.post("/bulk-scan-metadata")
+async def bulk_scan_metadata(req: BulkScanRequest) -> StreamingResponse:
+    """SSE stream: scan models for missing Civitai metadata, rate-limited 1 req/s.
+
+    Each event is a JSON object:
+      {"type": "start", "total": N}
+      {"type": "progress", "index": i, "total": N, "path": "...", "found": bool, "error": "..."}
+      {"type": "done", "found": N_found, "not_found": N_nf, "errors": N_err}
+    """
+    from orchestrator.api import key_store as _ks
+
+    ok, err = _is_path_safe(req.comfy_ui_path)
+    if not ok:
+        raise HTTPException(status_code=400, detail=err)
+
+    async def _generate():
+        # Collect model files to scan
+        model_files: list[Path] = []
+
+        if req.scope == "folder":
+            folder = Path(req.folder_path)
+            if not folder.is_dir():
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Folder not found'})}\n\n"
+                return
+            for ext in MODEL_EXTENSIONS:
+                model_files.extend(folder.rglob(f"*{ext}"))
+        else:
+            try:
+                yaml_path = Path(req.comfy_ui_path) / "extra_model_paths.yaml"
+                cats = await asyncio.to_thread(_parse_extra_model_paths, yaml_path)
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                return
+            if req.scope == "category" and req.category:
+                cats = {req.category: cats.get(req.category, [])}
+
+            for _cat, paths in cats.items():
+                for base in paths:
+                    base_path = Path(base)
+                    if not base_path.is_dir():
+                        continue
+                    for ext in MODEL_EXTENSIONS:
+                        model_files.extend(base_path.rglob(f"*{ext}"))
+
+        # Filter to models that have no metadata (or overwrite=True)
+        if not req.overwrite:
+            model_files = [
+                p for p in model_files
+                if not (p.parent / f"{p.stem}.metadata.json").exists()
+                and not (p.parent / f"{p.stem}.civitai.info").exists()
+            ]
+
+        model_files = sorted(set(model_files))
+        total = len(model_files)
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+
+        if total == 0:
+            yield f"data: {json.dumps({'type': 'done', 'found': 0, 'not_found': 0, 'errors': 0})}\n\n"
+            return
+
+        key = _ks.get_key("civitai")
+        headers: dict[str, str] = {}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+
+        n_found = n_nf = n_err = 0
+
+        async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
+            for i, model_path in enumerate(model_files):
+                result: dict[str, Any] = {"type": "progress", "index": i, "total": total, "path": str(model_path)}
+
+                try:
+                    # Get or compute sha256
+                    def _sha(p: Path = model_path) -> str:
+                        existing, _ = _read_metadata_json(p)
+                        saved = existing.get("sha256", "")
+                        if saved and len(saved) == 64:
+                            return saved
+                        h = hashlib.sha256()
+                        with open(p, "rb") as f:
+                            for chunk in iter(lambda: f.read(1 << 20), b""):
+                                h.update(chunk)
+                        return h.hexdigest()
+
+                    sha256 = await asyncio.to_thread(_sha)
+
+                    resp = await client.get(
+                        f"https://civitai.com/api/v1/model-versions/by-hash/{sha256}"
+                    )
+
+                    if resp.status_code == 404:
+                        n_nf += 1
+                        result["found"] = False
+                    elif resp.is_success:
+                        data = resp.json()
+                        model_block = data.get("model", {})
+                        new_meta: dict[str, Any] = {
+                            "sha256": sha256,
+                            "model_name": model_block.get("name", model_path.stem),
+                            "base_model": data.get("baseModel", ""),
+                            "trained_words": data.get("trainedWords", []),
+                            "description": _strip_html(model_block.get("description", "") or ""),
+                            "tags": [t.get("name", t) if isinstance(t, dict) else t for t in model_block.get("tags", [])],
+                            "civitai": {
+                                "modelId": model_block.get("id"),
+                                "modelVersionId": data.get("id"),
+                                "baseModel": data.get("baseModel", ""),
+                            },
+                        }
+
+                        def _save(p: Path = model_path, nm: dict = new_meta) -> None:
+                            existing, _ = _read_metadata_json(p)
+                            if req.overwrite:
+                                merged = {**existing, **nm}
+                            else:
+                                merged = dict(existing)
+                                for k, v in nm.items():
+                                    if not merged.get(k):
+                                        merged[k] = v
+                            meta_path = p.parent / f"{p.stem}.metadata.json"
+                            meta_path.write_text(
+                                json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8"
+                            )
+
+                        await asyncio.to_thread(_save)
+                        _SCAN_CACHE.clear()
+                        n_found += 1
+                        result["found"] = True
+                        result["model_name"] = model_block.get("name", model_path.stem)
+                    else:
+                        n_err += 1
+                        result["found"] = False
+                        result["error"] = f"HTTP {resp.status_code}"
+
+                except Exception as exc:
+                    n_err += 1
+                    result["found"] = False
+                    result["error"] = str(exc)
+
+                yield f"data: {json.dumps(result)}\n\n"
+
+                # Rate-limit: 1 request per second
+                if i < total - 1:
+                    await asyncio.sleep(1.0)
+
+        yield f"data: {json.dumps({'type': 'done', 'found': n_found, 'not_found': n_nf, 'errors': n_err})}\n\n"
+
+    return StreamingResponse(_generate(), media_type="text/event-stream")

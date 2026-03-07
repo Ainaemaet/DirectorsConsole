@@ -1928,3 +1928,200 @@
   width: calc(100% - 20px);
 }
 .disc-load-more:hover { color: var(--mb-text); border-color: var(--mb-accent); }
+
+/* ── Bulk Scan Modal ─────────────────────────────────────────────── */
+
+.bscan-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.bscan-modal {
+  background: var(--mb-bg-secondary);
+  border: var(--mb-border);
+  border-radius: var(--mb-radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  width: 560px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.bscan-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--mb-bg-tertiary);
+  border-bottom: var(--mb-border);
+  flex-shrink: 0;
+}
+
+.bscan-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mb-text);
+}
+
+.bscan-close {
+  background: transparent;
+  border: none;
+  color: var(--mb-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+}
+.bscan-close:hover { color: var(--mb-text); }
+.bscan-close:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.bscan-form {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+  border-bottom: var(--mb-border);
+}
+
+.bscan-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bscan-lbl {
+  font-size: 11px;
+  color: var(--mb-text-muted);
+  flex-shrink: 0;
+  min-width: 80px;
+}
+
+.bscan-lbl--check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.bscan-scope-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.bscan-scope-btn {
+  background: var(--mb-bg-tertiary);
+  border: var(--mb-border);
+  border-radius: var(--mb-radius);
+  color: var(--mb-text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.bscan-scope-btn:hover { color: var(--mb-text); }
+.bscan-scope-btn--active { color: var(--mb-accent); border-color: var(--mb-accent); }
+.bscan-scope-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.bscan-select,
+.bscan-input {
+  flex: 1;
+  background: var(--mb-bg-tertiary);
+  border: var(--mb-border);
+  border-radius: var(--mb-radius);
+  color: var(--mb-text);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 8px;
+}
+.bscan-input:focus,
+.bscan-select:focus { outline: 1px solid var(--mb-accent); }
+
+.bscan-hint {
+  font-size: 10px;
+  color: var(--mb-text-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.bscan-progress-area {
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  border-bottom: var(--mb-border);
+}
+
+.bscan-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--mb-bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bscan-progress-fill {
+  height: 100%;
+  background: var(--mb-accent);
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+.bscan-progress-label {
+  font-size: 10px;
+  color: var(--mb-text-muted);
+  flex-shrink: 0;
+  min-width: 80px;
+  text-align: right;
+}
+
+.bscan-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 14px;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+}
+
+.bscan-log-line { color: var(--mb-text-muted); }
+.bscan-log-line--found    { color: #3fb950; }
+.bscan-log-line--not_found { color: var(--mb-text-muted); }
+.bscan-log-line--error    { color: #f85149; }
+.bscan-log-line--info     { color: var(--mb-accent); }
+
+.bscan-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 10px 14px;
+  flex-shrink: 0;
+  border-top: var(--mb-border);
+}
+
+.bscan-btn {
+  background: var(--mb-bg-tertiary);
+  border: var(--mb-border);
+  border-radius: var(--mb-radius);
+  color: var(--mb-text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.bscan-btn:hover { border-color: var(--mb-accent); }
+.bscan-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.bscan-btn--start { background: var(--mb-accent); border-color: var(--mb-accent); color: #0d1117; font-weight: 600; }
+.bscan-btn--start:hover { opacity: 0.85; }
+.bscan-btn--stop { border-color: #f85149; color: #f85149; }

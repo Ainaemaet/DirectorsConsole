@@ -16,6 +16,7 @@ import { ModelCard } from './components/ModelCard';
 import { ModelDetailPanel } from './components/ModelDetailPanel';
 import { DiscoverPanel } from './components/DiscoverPanel';
 import { DownloadDrawer } from './components/DownloadDrawer';
+import { BulkScanModal } from './components/BulkScanModal';
 import { MODEL_NODE_MAP } from '../studio/services/studio-bridge';
 import './ModelBrowserUI.css';
 
@@ -132,6 +133,8 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
       loadModels(orchestratorUrl, comfyUiPath, selectedCategory);
     }
   }, [orchestratorUrl, comfyUiPath, selectedCategory, loadConfig, loadModels]);
+
+  const [bulkScanOpen, setBulkScanOpen] = React.useState(false);
 
   const toggleSortDir = () => setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
 
@@ -252,6 +255,14 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
               disabled={isLoadingConfig || isLoadingModels}
             >
               ↻
+            </button>
+
+            <button
+              className="mb-toolbar__btn"
+              onClick={() => setBulkScanOpen(true)}
+              title="Scan for missing Civitai metadata"
+            >
+              Scan Metadata
             </button>
 
             {selectedModel && MODEL_NODE_MAP[selectedModel.category] && (
@@ -396,6 +407,16 @@ export function ModelBrowserUI({ orchestratorUrl, comfyUiPath, isActive = true }
             />
           )}
         </div>
+      )}
+
+      {/* ── Bulk scan modal ────────────────────────────────────────────── */}
+      {bulkScanOpen && (
+        <BulkScanModal
+          orchestratorUrl={orchestratorUrl}
+          comfyUiPath={comfyUiPath}
+          categories={categories}
+          onClose={() => setBulkScanOpen(false)}
+        />
       )}
 
       {/* ── Download drawer ────────────────────────────────────────────── */}
